@@ -31,3 +31,10 @@
 - 管理 API 独立绑定 `127.0.0.1:3001`，不与局域网手机 API 共用监听入口。
 - 文件夹选择由后端受限目录树与手动路径校验实现；目录配置支持原子更新、备份与热加载。
 - 管理接口使用 loopback、Host/Origin、SameSite 会话和 CSRF 多层限制。
+
+## 开发环境补充
+
+- Android 模拟器 `emulator-5584` 在线，Android 17，1344×2992、密度 480。
+- ADB 位于 `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`，未加入 PATH。
+- 模拟器未发现 Expo Go 或 Remote ComfyUI 应用；需后续构建/安装调试包。
+- 本机 Java 17 可用，Android SDK 包含 android-35、android-36、android-37.0，Gradle 缓存已存在。
