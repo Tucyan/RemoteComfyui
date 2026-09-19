@@ -18,6 +18,14 @@ class PathValidationError(ValueError):
     pass
 
 
+class LibraryConfigError(ValueError):
+    """The persisted library document contains invalid model data."""
+
+
+class FilesystemProviderError(RuntimeError):
+    """The injected filesystem provider failed independently of path validity."""
+
+
 class FilesystemProvider(Protocol):
     def drives(self) -> list[str]: ...
 
@@ -118,14 +126,29 @@ class LibraryService:
         self.filesystem = filesystem or WindowsFilesystem()
 
     def list_drives(self) -> list[str]:
-        return [drive for drive in self.filesystem.drives() if self._is_fixed_drive(drive)]
+        try:
+            drives = self.filesystem.drives()
+        except Exception as exc:
+            raise FilesystemProviderError from exc
+        return [
+            drive for drive in drives
+            if isinstance(drive, str)
+            and len(drive) >= 3
+            and drive[0].isalpha()
+            and drive[1] == ":"
+            and drive[2] in "\\/"
+        ]
 
     def list_directories(self, path: str | None = None) -> list[str]:
         if path is None:
             return self.list_drives()
         canonical = self.validate_path(path)
         result = []
-        for child in self.filesystem.directories(canonical):
+        try:
+            children = self.filesystem.directories(canonical)
+        except Exception as exc:
+            raise FilesystemProviderError from exc
+        for child in children:
             name = ntpath.basename(str(child).rstrip("\\/"))
             if name.startswith(".") or name.casefold() == "system volume information":
                 continue
@@ -134,31 +157,54 @@ class LibraryService:
 
     def validate_path(self, path: str) -> str:
         _check_windows_path_shape(path)
-        if not self._is_fixed_drive(path):
-            raise PathValidationError("path must be on a fixed local drive")
-        return self.filesystem.validate_directory(path)
+        try:
+            if not self._is_fixed_drive(path):
+                raise PathValidationError("path must be on a fixed local drive")
+            return self.filesystem.validate_directory(path)
+        except PathValidationError:
+            raise
+        except FilesystemProviderError:
+            raise
+        except Exception as exc:
+            raise FilesystemProviderError from exc
 
     def _is_fixed_drive(self, path: str) -> bool:
         if not isinstance(path, str) or len(path) < 2:
             return False
         prefix = path[:2].upper()
-        return any(str(drive)[:2].upper() == prefix and not str(drive).startswith(("\\\\", "//")) for drive in self.filesystem.drives())
+        try:
+            drives = self.filesystem.drives()
+        except Exception as exc:
+            raise FilesystemProviderError from exc
+        return any(str(drive)[:2].upper() == prefix and not str(drive).startswith(("\\\\", "//")) for drive in drives)
 
     def load(self) -> list[LibraryRoot]:
         if not self.config_path.exists():
             return []
         try:
-            payload = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
-            rows = payload.get("libraries", []) if isinstance(payload, dict) else []
-            return [self._from_dict(row) for row in rows]
-        except (OSError, yaml.YAMLError, ValueError, TypeError) as exc:
+            raw = self.config_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError("invalid library configuration") from exc
+        try:
+            payload = yaml.safe_load(raw) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError("invalid library configuration") from exc
+        try:
+            if not isinstance(payload, dict) or not isinstance(payload.get("libraries", []), list):
+                raise ValueError("libraries must be a list")
+            rows = payload.get("libraries", [])
+            parsed = [self._from_dict(row) for row in rows]
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise ValueError("invalid library configuration") from exc
+        try:
+            return self._validate_libraries(parsed)
+        except (PathValidationError, LibraryConfigError) as exc:
             raise ValueError("invalid library configuration") from exc
 
     def save(self, libraries: list[LibraryRoot]) -> None:
+        validated = self._validate_libraries(libraries)
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        for library in libraries:
-            self._validate_model(library)
-        payload = {"libraries": [library.to_dict() for library in libraries]}
+        payload = {"libraries": [library.to_dict() for library in validated]}
         encoded = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True).encode("utf-8")
         if self.config_path.exists():
             for index in range(5, 1, -1):
@@ -190,35 +236,70 @@ class LibraryService:
     def _from_dict(row: Any) -> LibraryRoot:
         if not isinstance(row, dict):
             raise ValueError("library must be an object")
+        if not isinstance(row.get("id"), str) or not isinstance(row.get("name"), str) or not isinstance(row.get("path"), str):
+            raise ValueError("library id, name, and path must be strings")
         return LibraryRoot(
-            id=str(row["id"]), name=str(row["name"]), path=str(row["path"]),
+            id=row["id"], name=row["name"], path=row["path"],
             recursive=bool(row.get("recursive", True)), enabled=bool(row.get("enabled", True)),
         )
 
     @staticmethod
     def _validate_model(library: LibraryRoot) -> None:
+        if not isinstance(library, LibraryRoot):
+            raise LibraryConfigError("library must be an object")
+        if not isinstance(library.id, str) or not isinstance(library.name, str):
+            raise LibraryConfigError("library id and name must be strings")
         if not _SLUG.fullmatch(library.id):
-            raise ValueError("id must be a lowercase slug")
+            raise LibraryConfigError("id must be a lowercase slug")
         if not library.name or not library.name.strip():
-            raise ValueError("name must not be empty")
+            raise LibraryConfigError("name must not be empty")
+
+    def _validated_copy(self, library: LibraryRoot) -> LibraryRoot:
+        self._validate_model(library)
+        if not isinstance(library.path, str):
+            raise LibraryConfigError("path must be a string")
+        return LibraryRoot(
+            id=library.id,
+            name=library.name,
+            path=self.validate_path(library.path),
+            recursive=bool(library.recursive),
+            enabled=bool(library.enabled),
+        )
+
+    def _validate_libraries(self, libraries: list[LibraryRoot]) -> list[LibraryRoot]:
+        if not isinstance(libraries, list):
+            raise ValueError("libraries must be a list")
+        validated: list[LibraryRoot] = []
+        for library in libraries:
+            candidate = self._validated_copy(library)
+            if any(
+                candidate.id == existing.id
+                or candidate.path.casefold() == existing.path.casefold()
+                or _is_parent(candidate.path, existing.path)
+                or _is_parent(existing.path, candidate.path)
+                for existing in validated
+            ):
+                if any(candidate.id == existing.id for existing in validated):
+                    raise LibraryConfigError("library id already exists")
+                raise PathValidationError("library paths must not duplicate or nest")
+            validated.append(candidate)
+        return validated
 
     def _validate_collection(self, libraries: list[LibraryRoot], candidate: LibraryRoot, exclude_id: str | None = None) -> LibraryRoot:
-        self._validate_model(candidate)
-        canonical = self.validate_path(candidate.path)
+        validated_candidate = self._validated_copy(candidate)
         for existing in libraries:
             if existing.id == exclude_id:
                 continue
             existing_path = self.validate_path(existing.path)
-            if canonical.casefold() == existing_path.casefold() or _is_parent(canonical, existing_path) or _is_parent(existing_path, canonical):
+            if validated_candidate.path.casefold() == existing_path.casefold() or _is_parent(validated_candidate.path, existing_path) or _is_parent(existing_path, validated_candidate.path):
                 raise PathValidationError("library paths must not duplicate or nest")
-        candidate.path = canonical
-        return candidate
+        return validated_candidate
 
     def create(self, library: LibraryRoot) -> LibraryRoot:
         libraries = self.load()
         if any(item.id == library.id for item in libraries):
             raise ValueError("library id already exists")
-        self._validate_collection(libraries, library)
+        library = self._validate_collection(libraries, library)
         libraries.append(library)
         self.save(libraries)
         return library

@@ -20,6 +20,9 @@ def _loopback(value: str | None) -> bool:
 
 
 def enforce_admin_request(request: Request) -> None:
+    authorization = request.headers.get("authorization", "")
+    if authorization.strip().lower().startswith("bearer "):
+        raise PermissionError("bearer authorization is not accepted by the admin API")
     client_host = request.client.host if request.client else None
     if not _loopback(client_host):
         raise PermissionError("admin API requires a loopback client")
