@@ -23,3 +23,5 @@
 - Task 4 开始：收敛两个指定 ComfyUI 工作流为固定 API 模板和参数化生成接口。
 - Task 4 已提交 `9cfc621`：固定 Qwen/MiniMax 模板、参数校验与 ComfyUI 客户端；服务端测试 `69 passed`，尚未执行真实 GPU smoke 生成。
 - Task 5 开始：实现配对、设备令牌、任务持久化、公共手机 API 和产物访问。
+- Task 5 已提交 `efef12d`：SQLite、配对/设备令牌、任务 worker、公共生图/生视频/上传/目录/产物 API，以及 Windows 管理端配对设备接口；全量服务端测试 `78 passed`。
+- Task 6 开始：实现 Expo React Native 安卓客户端。

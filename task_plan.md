@@ -17,8 +17,8 @@
 - [x] Task 2：目录配置与 Windows 管理 API
 - [x] Task 3：Windows 浏览器管理页
 - [x] Task 4：固定工作流与 ComfyUI 客户端
-- [~] Task 5：任务、配对、产物与手机 API
-- [ ] Task 6：Expo React Native 客户端
+- [x] Task 5：任务、配对、产物与手机 API
+- [~] Task 6：Expo React Native 客户端
 - [ ] Task 7：Windows 启动与端到端验收
 - [ ] 最终规格和代码质量审查
 
