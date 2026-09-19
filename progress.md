@@ -25,3 +25,5 @@
 - Task 5 开始：实现配对、设备令牌、任务持久化、公共手机 API 和产物访问。
 - Task 5 已提交 `efef12d`：SQLite、配对/设备令牌、任务 worker、公共生图/生视频/上传/目录/产物 API，以及 Windows 管理端配对设备接口；全量服务端测试 `78 passed`。
 - Task 6 开始：实现 Expo React Native 安卓客户端。
+- Task 6 已提交 `552cb24`：Expo Android 客户端、配对、生成、任务、产物、图库和设置页面；RN 测试 `8 passed`、类型检查和 Android 导出通过，已安装到 `emulator-5584` 并确认配对页无空白/溢出。
+- Task 7 开始：补充 Windows 启动脚本、文档和端到端验收。
