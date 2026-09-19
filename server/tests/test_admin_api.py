@@ -32,6 +32,7 @@ class ValueFailFS(FakeFS):
         raise ValueError("provider secret C:\\private")
 
 
+
 @pytest.mark.asyncio
 async def test_public_app_does_not_expose_admin_routes(tmp_path):
     app = create_public_app(_settings(tmp_path))
@@ -190,3 +191,30 @@ async def test_admin_delete_translates_storage_failure_to_503(tmp_path):
             headers={"X-CSRF-Token": session.json()["csrf_token"]},
         )
         assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_admin_serves_spa_and_falls_back_for_nested_admin_paths(tmp_path):
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><body>admin shell</body></html>", encoding="utf-8")
+    app = create_admin_app(_settings(tmp_path), filesystem=FakeFS(), static_dir=static_dir)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:3001") as client:
+        root = await client.get("/admin")
+        nested = await client.get("/admin/libraries")
+        api = await client.get("/admin/api/libraries")
+    assert root.status_code == 200
+    assert nested.status_code == 200
+    assert root.text == nested.text
+    assert api.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_without_static_build_returns_clear_503(tmp_path):
+    app = create_admin_app(_settings(tmp_path), filesystem=FakeFS(), static_dir=tmp_path / "missing-dist")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:3001") as client:
+        response = await client.get("/admin")
+    assert response.status_code == 503
+    assert "npm run build" in response.text

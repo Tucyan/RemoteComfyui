@@ -4,10 +4,12 @@ import inspect
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, HTMLResponse
 
 from .api.admin import register_admin_routes
 from .libraries.service import LibraryService
@@ -37,7 +39,37 @@ async def _default_health_probe(settings: Settings) -> Mapping[str, Any]:
     return {"online": True, "version": version}
 
 
-def _build_app(settings: Settings, health_probe: HealthProbe | None, *, admin: bool = False, filesystem=None, library_service=None) -> FastAPI:
+def _default_admin_static_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "apps" / "windows-admin" / "dist"
+
+
+def _install_admin_ui(app: FastAPI, static_dir: str | Path | None) -> None:
+    root = Path(static_dir) if static_dir is not None else _default_admin_static_dir()
+    index = root / "index.html"
+
+    def render_index() -> FileResponse | HTMLResponse:
+        if not index.is_file():
+            return HTMLResponse(
+                "Admin UI build not found. Run npm run build in apps/windows-admin.",
+                status_code=503,
+            )
+        return FileResponse(index)
+
+    @app.get("/admin", include_in_schema=False)
+    async def admin_root():
+        return render_index()
+
+    @app.get("/admin/{path:path}", include_in_schema=False)
+    async def admin_spa(path: str):
+        if path == "api" or path.startswith("api/"):
+            return HTMLResponse("Not Found", status_code=404)
+        requested = root / path
+        if requested.is_file() and root in requested.resolve().parents:
+            return FileResponse(requested)
+        return render_index()
+
+
+def _build_app(settings: Settings, health_probe: HealthProbe | None, *, admin: bool = False, filesystem=None, library_service=None, static_dir: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="Remote ComfyUI Gateway")
     probe = health_probe or (lambda: _default_health_probe(settings))
 
@@ -67,6 +99,7 @@ def _build_app(settings: Settings, health_probe: HealthProbe | None, *, admin: b
         app.state.admin_sessions = {}
         install_admin_guard(app)
         register_admin_routes(app, library_service or LibraryService(settings.data_dir, filesystem=filesystem))
+        _install_admin_ui(app, static_dir)
 
     return app
 
@@ -78,5 +111,5 @@ def create_public_app(
     return _build_app(settings or Settings(), health_probe)
 
 
-def create_admin_app(settings: Settings | None = None, *, filesystem=None, library_service=None) -> FastAPI:
-    return _build_app(settings or Settings(), None, admin=True, filesystem=filesystem, library_service=library_service)
+def create_admin_app(settings: Settings | None = None, *, filesystem=None, library_service=None, static_dir: str | Path | None = None) -> FastAPI:
+    return _build_app(settings or Settings(), None, admin=True, filesystem=filesystem, library_service=library_service, static_dir=static_dir)
