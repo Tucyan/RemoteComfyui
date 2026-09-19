@@ -29,7 +29,7 @@ export function VideoSettings({ value, onChange }: Props) {
     <Text style={styles.sub}>实际生成尺寸：{width} × {height}（宽高须是 32 的倍数）</Text>
     <Text style={styles.label}>生成帧数</Text>
     <View style={styles.frameRow}><Pressable accessibilityLabel="减少帧数" onPress={() => set({ frames: String(adjustVideoFrames(Number(value.frames), -1)) })} style={styles.step}><Text style={styles.stepText}>−</Text></Pressable><TextInput accessibilityLabel="生成帧数" keyboardType="number-pad" value={value.frames} onChangeText={(frames) => set({ frames })} style={[styles.input, styles.frameInput]} /><Pressable accessibilityLabel="增加帧数" onPress={() => set({ frames: String(adjustVideoFrames(Number(value.frames), 1)) })} style={styles.step}><Text style={styles.stepText}>＋</Text></Pressable></View>
-    <Text style={styles.sub}>范围 124–362，步长 17（例如 124、141、158）</Text>
+    <Text style={styles.sub}>范围 5–362，满足 17n+5（例如 5、22、39）</Text>
   </View>;
 }
 

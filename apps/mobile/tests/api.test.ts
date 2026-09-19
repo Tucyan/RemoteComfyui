@@ -60,6 +60,13 @@ describe("mobile API client", () => {
     expect(fetchMock).toHaveBeenCalledWith("http://gateway:3000/api/v1/library-images/libimg_1/import", expect.objectContaining({ method: "POST", headers: { Authorization: "Bearer rc_test" } }));
   });
 
+  it("loads subsequent library pages using an offset", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ images: [] }), { status: 200 }));
+    const api = new RemoteApi("http://gateway:3000", "rc_test");
+    await api.listLibraryImages("gallery", 50);
+    expect(fetchMock).toHaveBeenCalledWith("http://gateway:3000/api/v1/libraries/gallery/images?offset=50&limit=50", expect.objectContaining({ headers: { Authorization: "Bearer rc_test" } }));
+  });
+
   it("sends explicit video dimensions and deletes a generated artifact", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 204 }));
     const api = new RemoteApi("http://gateway:3000", "rc_test");

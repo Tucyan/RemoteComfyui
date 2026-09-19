@@ -78,6 +78,12 @@ async def test_library_image_can_be_imported_as_reference_without_phone_reupload
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         listing = await client.get("/api/v1/libraries/gallery/images", headers=headers)
         image_id = listing.json()["images"][0]["id"]
+        content_url = listing.json()["images"][0]["content_url"]
+        assert (await client.get(content_url)).status_code == 401
+        original = await client.get(content_url, headers=headers)
+        assert original.status_code == 200
+        assert original.headers["content-type"] == "image/png"
+        assert original.content == b"PNG image"
         imported = await client.post(f"/api/v1/library-images/{image_id}/import", headers=headers)
         assert imported.status_code == 200
         asset_id = imported.json()["id"]

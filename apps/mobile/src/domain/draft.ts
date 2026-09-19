@@ -13,7 +13,7 @@ export const VIDEO_PRESETS: Record<string, { width: number; height: number; labe
   square_standard: { width: 640, height: 640, label: "方形标准" },
 };
 
-export const VIDEO_FRAMES = [124, 175, 243, 294, 362] as const;
+export const COMMON_VIDEO_FRAMES = [5, 22, 39, 124, 175, 243, 294, 362] as const;
 export const VIDEO_RATIOS: Record<string, [number, number]> = {
   "2:3": [2, 3], "3:4": [3, 4], "9:16": [9, 16], "1:1": [1, 1],
   "16:9": [16, 9], "4:3": [4, 3], "3:2": [3, 2],
@@ -35,7 +35,7 @@ export function calculateVideoDimensions(ratio: string, megapixels: number): { w
 export function adjustVideoFrames(frames: number, direction: -1 | 1): number {
   const current = Number.isFinite(frames) ? frames : 124;
   const step = direction > 0 ? Math.floor((current - 5) / 17) + 1 : Math.ceil((current - 5) / 17) - 1;
-  return Math.max(124, Math.min(362, step * 17 + 5));
+  return Math.max(5, Math.min(362, step * 17 + 5));
 }
 
 export function formatElapsed(startSeconds: number, nowSeconds: number): string {
@@ -89,8 +89,8 @@ export function validateVideoSettings(
   if (!Number.isInteger(selected.width) || !Number.isInteger(selected.height) || selected.width < 32 || selected.height < 32 || selected.width > 1920 || selected.height > 1088 || selected.width % 32 !== 0 || selected.height % 32 !== 0) {
     return { ok: false, error: "宽高必须是 32 的倍数，且不超过 1920 × 1088" };
   }
-  if (!Number.isInteger(count) || count! < 124 || count! > 362 || (count! - 5) % 17 !== 0) {
-    return { ok: false, error: "帧数须为 124～362 且满足 17n+5" };
+  if (!Number.isInteger(count) || count! < 5 || count! > 362 || (count! - 5) % 17 !== 0) {
+    return { ok: false, error: "帧数须为 5～362 且满足 17n+5" };
   }
   return { ok: true, width: selected.width, height: selected.height };
 }

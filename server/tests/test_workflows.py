@@ -87,12 +87,12 @@ def test_video_dimensions_reject_unsafe_values(width: int, height: int):
         validate_video_dimensions(width, height)
 
 
-@pytest.mark.parametrize("frames", [124, 141, 175, 362])
+@pytest.mark.parametrize("frames", [5, 22, 39, 124, 141, 175, 362])
 def test_video_frames_follow_17n_plus_5_within_allowed_range(frames: int):
     assert validate_video_frames(frames) == frames
 
 
-@pytest.mark.parametrize("frames", [123, 125, 363, 380])
+@pytest.mark.parametrize("frames", [0, 4, 6, 21, 123, 125, 363, 380])
 def test_video_frames_reject_values_outside_allowed_sequence(frames: int):
     with pytest.raises(ValueError):
         validate_video_frames(frames)

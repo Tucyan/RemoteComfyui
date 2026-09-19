@@ -16,7 +16,7 @@ _QWEN_TEMPLATE_BY_COUNT = {
 _MINIMAX_TEMPLATE = "video_minimax_h3.json"
 _MAX_VIDEO_WIDTH = 1920
 _MAX_VIDEO_HEIGHT = 1088
-_MIN_VIDEO_FRAMES = 124
+_MIN_VIDEO_FRAMES = 5
 _MAX_VIDEO_FRAMES = 362
 _REFERENCE_LIMITS = {"qwen": (1, 3), "minimax": (1, 9)}
 
@@ -98,7 +98,7 @@ def validate_video_frames(frames: int) -> int:
         or not _MIN_VIDEO_FRAMES <= frames <= _MAX_VIDEO_FRAMES
         or (frames - 5) % 17 != 0
     ):
-        raise ValueError("video frames must follow 17n+5 within 124 to 362")
+        raise ValueError("video frames must follow 17n+5 within 5 to 362")
     return frames
 
 

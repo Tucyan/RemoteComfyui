@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  VIDEO_FRAMES,
+  COMMON_VIDEO_FRAMES,
   VIDEO_PRESETS,
   insertPictureToken,
   moveReference,
@@ -40,7 +40,7 @@ describe("mobile generation draft", () => {
 
   it("validates only the supported video presets and 17n+5 frames", () => {
     expect(Object.keys(VIDEO_PRESETS)).toContain("portrait_low");
-    expect(VIDEO_FRAMES).toEqual([124, 175, 243, 294, 362]);
+    expect(COMMON_VIDEO_FRAMES).toEqual([5, 22, 39, 124, 175, 243, 294, 362]);
     expect(validateVideoSettings("portrait_low", 124)).toEqual({
       ok: true,
       width: 352,
@@ -61,12 +61,18 @@ describe("mobile generation draft", () => {
   });
 
   it("validates custom dimensions and advances frames by one workflow step", () => {
+    expect(validateVideoSettings(640, 960, 5)).toEqual({ ok: true, width: 640, height: 960 });
+    expect(validateVideoSettings(640, 960, 22)).toEqual({ ok: true, width: 640, height: 960 });
+    expect(validateVideoSettings(640, 960, 4).ok).toBe(false);
+    expect(validateVideoSettings(640, 960, 6).ok).toBe(false);
     expect(validateVideoSettings(640, 960, 141)).toEqual({ ok: true, width: 640, height: 960 });
     expect(validateVideoSettings(641, 960, 141).ok).toBe(false);
     expect(validateVideoSettings(640, 960, 140).ok).toBe(false);
     expect(adjustVideoFrames(124, 1)).toBe(141);
     expect(adjustVideoFrames(141, -1)).toBe(124);
-    expect(adjustVideoFrames(124, -1)).toBe(124);
+    expect(adjustVideoFrames(124, -1)).toBe(107);
+    expect(adjustVideoFrames(22, -1)).toBe(5);
+    expect(adjustVideoFrames(5, -1)).toBe(5);
     expect(adjustVideoFrames(362, 1)).toBe(362);
   });
 
