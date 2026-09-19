@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -11,6 +12,7 @@ from .schemas import ComfyUIHealth, GatewayHealth, HealthResponse
 from .settings import Settings
 
 HealthProbe = Callable[[], Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
+logger = logging.getLogger(__name__)
 
 
 async def _default_health_probe(settings: Settings) -> Mapping[str, Any]:
@@ -41,10 +43,11 @@ def _build_app(settings: Settings, health_probe: HealthProbe | None) -> FastAPI:
                     error=result.get("error"),
                 ),
             )
-        except Exception as exc:
+        except Exception:
+            logger.exception("ComfyUI health probe failed")
             return HealthResponse(
                 gateway=GatewayHealth(),
-                comfyui=ComfyUIHealth(status="offline", error=str(exc)),
+                comfyui=ComfyUIHealth(status="offline", error="ComfyUI health check failed"),
             )
 
     return app
@@ -59,4 +62,3 @@ def create_public_app(
 
 def create_admin_app(settings: Settings | None = None) -> FastAPI:
     return _build_app(settings or Settings(), None)
-

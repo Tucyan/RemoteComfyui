@@ -25,7 +25,7 @@ async def test_health_reports_gateway_and_comfyui_online():
 @pytest.mark.asyncio
 async def test_health_degrades_when_comfyui_is_unavailable():
     async def health_probe():
-        raise ConnectionError("ComfyUI is unavailable")
+        raise ConnectionError("failed to read C:\\secrets\\comfyui-token.txt token=super-secret")
 
     app = create_public_app(Settings(_env_file=None), health_probe=health_probe)
     transport = httpx.ASGITransport(app=app)
@@ -38,7 +38,9 @@ async def test_health_degrades_when_comfyui_is_unavailable():
         "comfyui": {
             "status": "offline",
             "version": None,
-            "error": "ComfyUI is unavailable",
+            "error": "ComfyUI health check failed",
         },
     }
 
+    assert "comfyui-token.txt" not in response.text
+    assert "super-secret" not in response.text
