@@ -152,7 +152,7 @@ function LibraryDialog({ mode, form, setForm, saving, formError, onClose, onSubm
     <form onSubmit={onSubmit}>
       <label>目录名称<input aria-label="目录名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required autoFocus disabled={saving} /></label>
       <label>目录路径<input aria-label="目录路径" value={form.path} onChange={(event) => { validationId.current += 1; setValidatedPath(""); setBrowseError(""); setForm({ ...form, path: event.target.value }); }} placeholder="例如 C:\\Pictures" required disabled={saving} /></label>
-      <div className="path-validation"><button type="button" className="secondary" disabled={saving || !form.path.trim()} onClick={() => choose(form.path.trim())}>验证路径</button>{validatedPath === form.path && <span role="status">路径已验证</span>}</div>
+      <div className="path-validation"><button type="button" className="secondary" disabled={saving || !form.path.trim()} onClick={() => choose(form.path.trim())}>验证路径</button>{validatedPath && validatedPath === form.path ? <span role="status">路径已验证</span> : null}</div>
       {formError && <p className="picker-error" role="alert">{formError}</p>}
       <div className="folder-picker"><div className="picker-heading"><strong>选择文件夹</strong><span>可逐层展开目录</span></div>{browseError && <p className="picker-error" role="alert">{browseError}</p>}<div className="tree">{drives.map((drive) => <FolderTreeNode key={drive} path={drive} root expanded={expanded} childrenByPath={childrenByPath} onToggle={toggle} onChoose={choose} />)}</div></div>
       <label className="check-row"><input type="checkbox" checked={form.recursive} onChange={(event) => setForm({ ...form, recursive: event.target.checked })} disabled={saving} />包含所有子目录</label>

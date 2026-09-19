@@ -42,6 +42,7 @@ describe("AdminApp", () => {
     await screen.findByText("还没有配置图片目录");
     await userEvent.click(screen.getByRole("button", { name: "新增目录" }));
     expect(await screen.findByRole("dialog", { name: "新增图片目录" })).toBeInTheDocument();
+    expect(screen.queryByText("路径已验证")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "C:\\" }));
     expect(await screen.findByRole("button", { name: "选择 C:\\Pictures" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "选择 C:\\Pictures" }));
