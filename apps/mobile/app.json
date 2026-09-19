@@ -9,6 +9,10 @@
       "package": "com.remotecomfyui.mobile",
       "usesCleartextTraffic": true
     },
-    "plugins": ["expo-image-picker", "expo-secure-store"]
+    "plugins": [
+      "expo-image-picker",
+      "expo-secure-store",
+      "expo-video"
+    ]
   }
 }

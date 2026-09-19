@@ -39,3 +39,9 @@
 - 模拟器未发现 Expo Go 或 Remote ComfyUI 应用；需后续构建/安装调试包。
 - 本机 Java 17 可用，Android SDK 包含 android-35、android-36、android-37.0，Gradle 缓存已存在。
 - ComfyUI 后端代码中未发现通用的“前端工作流 JSON 转 API prompt”接口；目标模板需要在 ComfyUI 前端导出 API Format，或依据本机 `/object_info` 与连线手工构建并验证。
+# 2026-09-19 功能优化发现
+
+- 现有图库页面点击图片会从受保护的图库 API 下载，再上传为参考图资产，随后回到生成页。代码路径存在；需要增加端到端测试，避免仅凭 UI 推断可用。
+- 当前 `app-debug.apk` 需 Metro；已另有内置 JS 的 `app-release.apk`。本轮改动后必须重建 release APK 才会体现在手机。
+- 视频服务端限制宽高为 32 的倍数，最大 1920×1088；帧数限定 124～362 且满足 `17n+5`。UI 自定义长宽与滑块生成值都需服从这些约束。
+- 产物路径位于数据目录 `artifacts` 下，数据库记录有 `storage_path`；删除必须验证路径仍在该目录内，再删除文件及记录，不可影响白名单图库或 ComfyUI 原始输出。

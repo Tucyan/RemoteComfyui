@@ -19,6 +19,7 @@ class FakeComfy:
         self.uploaded.append(filename)
         return {"name": filename, "subfolder": "", "type": "input"}
 
+
     async def queue_prompt(self, prompt, **kwargs):
         self.queued.append(prompt)
         return {"prompt_id": "prompt-123"}
@@ -31,6 +32,12 @@ class FakeComfy:
                 "outputs": {"22": {"images": [{"filename": "result.png", "subfolder": "", "type": "output"}]}},
             }
         }
+
+
+class RenamingComfy(FakeComfy):
+    async def upload_image(self, filename, content, **kwargs):
+        self.uploaded.append(filename)
+        return {"name": f"renamed-{len(self.uploaded)}.png", "subfolder": "", "type": "input"}
 
 
 @pytest.mark.asyncio
@@ -68,3 +75,59 @@ def test_artifact_ids_hide_storage_paths_and_support_ranges(tmp_path):
     assert "private" not in artifact
     assert "path" not in artifact
     assert service.read_artifact(artifact["id"], 2, 5) == (b"2345", 10, "image/png")
+
+
+def test_delete_artifact_removes_local_file_and_database_row(tmp_path):
+    service = JobService(Database(tmp_path / "jobs.db"), FakeComfy(), tmp_path)
+    job = service.create_job("image", {"reference_images": ["one.png"], "prompt": "one"})
+    artifact = service.add_artifact(job["id"], "image/png", b"pixels", "result.png")
+    stored = service.db.fetchone("SELECT storage_path FROM artifacts WHERE id=?", (artifact["id"],))
+    path = __import__("pathlib").Path(stored["storage_path"])
+
+    service.delete_artifact(artifact["id"])
+
+    assert not path.exists()
+    assert service.db.fetchone("SELECT id FROM artifacts WHERE id=?", (artifact["id"],)) is None
+    with pytest.raises(KeyError):
+        service.delete_artifact(artifact["id"])
+
+
+def test_delete_artifact_refuses_path_outside_artifact_directory(tmp_path):
+    service = JobService(Database(tmp_path / "jobs.db"), FakeComfy(), tmp_path)
+    job = service.create_job("image", {"reference_images": ["one.png"], "prompt": "one"})
+    artifact = service.add_artifact(job["id"], "image/png", b"pixels", "result.png")
+    outside = tmp_path / "keep.png"
+    outside.write_bytes(b"keep")
+    service.db.execute("UPDATE artifacts SET storage_path=? WHERE id=?", (str(outside), artifact["id"]))
+
+    with pytest.raises(PermissionError):
+        service.delete_artifact(artifact["id"])
+    assert outside.read_bytes() == b"keep"
+
+
+def test_running_start_time_stays_stable_during_reconciliation(tmp_path):
+    current = [100.0]
+    service = JobService(Database(tmp_path / "jobs.db"), FakeComfy(), tmp_path, clock=lambda: current[0])
+    job = service.create_job("image", {"reference_images": ["one.png"], "prompt": "one"})
+    service.mark_submitted(job["id"], "prompt-1")
+    current[0] = 120.0
+    service.mark_running(job["id"])
+    current[0] = 150.0
+    service.mark_running(job["id"])
+    assert service.get_job(job["id"])["started_at"] == 120.0
+
+
+@pytest.mark.asyncio
+async def test_worker_uses_comfyui_renamed_reference_filenames(tmp_path):
+    comfy = RenamingComfy()
+    service = JobService(Database(tmp_path / "jobs.db"), comfy, tmp_path)
+    first = tmp_path / "a.png"
+    second = tmp_path / "b.png"
+    first.write_bytes(b"a")
+    second.write_bytes(b"b")
+    service.create_job("image", {"reference_images": ["same.png", "same.png"], "reference_files": [{"asset_id": "a", "filename": "same.png", "path": str(first)}, {"asset_id": "b", "filename": "same.png", "path": str(second)}], "prompt": "edit"})
+    await service.run_once()
+    assert comfy.queued
+    names = [inputs["image"] for node in comfy.queued[0].values() for inputs in [node.get("inputs", {})] if isinstance(inputs.get("image"), str)]
+    assert "renamed-1.png" in names
+    assert "renamed-2.png" in names

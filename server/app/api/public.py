@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import hashlib
 import secrets
+import shutil
 import time
 from pathlib import Path
 
@@ -182,6 +183,14 @@ def register_public_routes(app, settings: Settings, pairing: PairingService, job
         except ValueError as exc:
             raise HTTPException(status_code=416, detail="invalid range") from exc
 
+    @router.delete("/artifacts/{artifact_id}", status_code=204)
+    async def delete_artifact(request: Request, artifact_id: str):
+        device(request)
+        try:
+            jobs.delete_artifact(artifact_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="artifact not found") from exc
+
     @router.get("/libraries")
     async def library_list(request: Request):
         device(request)
@@ -205,17 +214,23 @@ def register_public_routes(app, settings: Settings, pairing: PairingService, job
     @router.get("/library-images/{image_id}/content")
     async def library_image_content(request: Request, image_id: str):
         device(request)
-        row = jobs.db.fetchone("SELECT * FROM library_images WHERE id=?", (image_id,))
-        if row is None:
-            raise HTTPException(status_code=404, detail="library image not found")
-        root = next((item for item in libraries.load() if item.id == row["library_id"] and item.enabled), None)
-        if root is None:
-            raise HTTPException(status_code=404, detail="library image not found")
-        root_path = Path(root.path).resolve()
-        path = Path(row["storage_path"]).resolve()
-        if root_path not in path.parents or not path.is_file():
-            raise HTTPException(status_code=404, detail="library image not found")
+        row, path = _resolve_library_image(jobs, libraries, image_id)
         return Response(path.read_bytes(), media_type=row["mime_type"])
+
+    @router.post("/library-images/{image_id}/import")
+    async def import_library_image(request: Request, image_id: str):
+        device(request)
+        row, path = _resolve_library_image(jobs, libraries, image_id)
+        size = path.stat().st_size
+        if size < 1 or size > settings.max_upload_size_bytes:
+            raise HTTPException(status_code=413, detail="image exceeds upload limit")
+        asset_id = "asset_" + secrets.token_urlsafe(12)
+        upload_dir = Path(settings.data_dir) / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        target = upload_dir / f"{asset_id}{path.suffix.lower()}"
+        shutil.copyfile(path, target)
+        jobs.db.execute("INSERT INTO uploads(id,filename,storage_path,mime_type,size,created_at) VALUES(?,?,?,?,?,?)", (asset_id, path.name[:160], str(target), row["mime_type"], size, time.time()))
+        return {"id": asset_id, "filename": path.name, "mime_type": row["mime_type"], "size": size}
 
     @router.get("/library-images/{image_id}/thumbnail")
     async def library_image_thumbnail(request: Request, image_id: str):
@@ -225,7 +240,7 @@ def register_public_routes(app, settings: Settings, pairing: PairingService, job
 
 
 def _public_job(job: dict) -> dict:
-    return {key: job.get(key) for key in ("id", "kind", "status", "prompt_id", "error", "created_at", "updated_at", "artifacts")}
+    return {key: job.get(key) for key in ("id", "kind", "status", "prompt_id", "error", "created_at", "updated_at", "started_at", "artifacts")}
 
 
 def _parse_range(value: str, total: int) -> tuple[int, int]:
@@ -265,6 +280,20 @@ def _video_dimensions(payload: VideoJobRequest) -> tuple[int, int]:
         except KeyError as exc:
             raise ValueError("unsupported video resolution preset") from exc
     return payload.width, payload.height
+
+
+def _resolve_library_image(jobs: JobService, libraries: LibraryService, image_id: str):
+    row = jobs.db.fetchone("SELECT * FROM library_images WHERE id=?", (image_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail="library image not found")
+    root = next((item for item in libraries.load() if item.id == row["library_id"] and item.enabled), None)
+    if root is None:
+        raise HTTPException(status_code=404, detail="library image not found")
+    root_path = Path(root.path).resolve()
+    path = Path(row["storage_path"]).resolve()
+    if root_path not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="library image not found")
+    return row, path
 
 
 def _sync_library(jobs: JobService, root) -> None:

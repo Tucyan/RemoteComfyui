@@ -93,6 +93,8 @@ http://127.0.0.1:3001/admin
 - Qwen 图片编辑：1 到 3 张参考图
 - MiniMax 视频：1 到 9 张参考图，以及符合工作流步长的分辨率和帧数
 - 手机相册选择、电脑白名单图库选择、任务状态、图片/视频产物预览、保存和分享
+- 图片与视频提示词分别保留；视频可选七种比例、目标清晰度 0.2–1.5 MP，或输入 32 对齐的自定义宽高；帧数可输入并用按钮按工作流步长微调
+- 产物可在手机内预览：图片支持放大，视频支持播放；点击删除并确认后，会永久删除 Gateway 数据目录中的该产物文件及记录，不删除电脑图库原图或 ComfyUI 原始输出
 
 ## Android 模拟器调试
 
@@ -121,6 +123,8 @@ npm run export
 npm run android
 Pop-Location
 ```
+
+直接安装到手机测试时请使用 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`。`app-debug.apk` 需要 Metro，脱离开发环境会显示 `Unable to load script`。源码变更后需重新运行 `apps/mobile/android/gradlew.bat assembleRelease`，旧 APK 不会自动更新。
 
 ## 局域网防火墙
 

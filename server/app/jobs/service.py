@@ -83,6 +83,10 @@ class JobService:
     def mark_submitted(self, job_id: str, prompt_id: str) -> None:
         self.db.execute("UPDATE jobs SET status='submitted',prompt_id=?,updated_at=? WHERE id=?", (prompt_id, self.clock(), job_id))
 
+    def mark_running(self, job_id: str) -> None:
+        now = self.clock()
+        self.db.execute("UPDATE jobs SET status='running',started_at=COALESCE(started_at,?),updated_at=? WHERE id=?", (now, now, job_id))
+
     def cancel(self, job_id: str) -> dict[str, Any]:
         with self.db.transaction() as connection:
             row = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -102,8 +106,10 @@ class JobService:
         payload = self.db.json_loads(row["payload_json"])
         try:
             references = list(payload.get("reference_images", []))
-            for upload in payload.get("reference_files", []):
-                await self.comfy.upload_image(upload["filename"], Path(upload["path"]).read_bytes(), content_type=upload.get("mime_type", "application/octet-stream"))
+            for index, upload in enumerate(payload.get("reference_files", [])):
+                result = await self.comfy.upload_image(upload["filename"], Path(upload["path"]).read_bytes(), content_type=upload.get("mime_type", "application/octet-stream"))
+                if isinstance(result, dict) and isinstance(result.get("name"), str) and result["name"]:
+                    references[index] = result["name"]
             if row["kind"] == "image":
                 prompt = build_qwen_prompt(references, payload["prompt"], seed=payload.get("seed"))
             else:
@@ -130,11 +136,11 @@ class JobService:
     async def _apply_history(self, job_id: str, prompt_id: str, history: dict[str, Any]) -> None:
         record = history.get(prompt_id) if isinstance(history, dict) else None
         if not isinstance(record, dict):
-            self.db.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?", (self.clock(), job_id))
+            self.mark_running(job_id)
             return
         status = record.get("status", {})
         if not status.get("completed") and status.get("status_str") not in {"success", "succeeded"}:
-            self.db.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?", (self.clock(), job_id))
+            self.mark_running(job_id)
             return
         for output in _iter_outputs(record.get("outputs", {})):
             try:
@@ -163,6 +169,16 @@ class JobService:
         if row is None:
             raise KeyError(artifact_id)
         return self._artifact_response(row)
+
+    def delete_artifact(self, artifact_id: str) -> None:
+        row = self.db.fetchone("SELECT storage_path FROM artifacts WHERE id=?", (artifact_id,))
+        if row is None:
+            raise KeyError(artifact_id)
+        path = Path(row["storage_path"]).resolve()
+        if path.parent != self.artifact_dir.resolve():
+            raise PermissionError("artifact path is outside storage")
+        path.unlink(missing_ok=True)
+        self.db.execute("DELETE FROM artifacts WHERE id=?", (artifact_id,))
 
     def read_artifact(self, artifact_id: str, start: int = 0, end: int | None = None) -> tuple[bytes, int, str]:
         row = self.db.fetchone("SELECT * FROM artifacts WHERE id=?", (artifact_id,))

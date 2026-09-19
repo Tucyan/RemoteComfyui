@@ -3,13 +3,14 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { StatusBar } from "expo-status-bar";
 import {
   ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
-  Linking,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -21,15 +22,17 @@ import {
 } from "react-native";
 import { RemoteApi, type Artifact, type GenerationJob, type Library, type LibraryImage } from "./src/api/client";
 import { ReferenceImageStrip, type ReferenceItem } from "./src/components/ReferenceImageStrip";
-import { VideoSettings } from "./src/components/VideoSettings";
+import { VideoSettings, type VideoDraft } from "./src/components/VideoSettings";
 import {
   insertPictureToken,
+  calculateVideoDimensions,
+  formatElapsed,
+  updateModePrompt,
   moveReference,
   normalizeReferences,
   renumberPictureTokens,
   validateReferenceCount,
   validateVideoSettings,
-  VIDEO_PRESETS,
 } from "./src/domain/draft";
 import { PairingStore, type PairingDetails } from "./src/storage/pairing";
 
@@ -98,10 +101,11 @@ function PairScreen({ onPaired }: { onPaired: (details: PairingDetails) => Promi
 function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: PairingDetails; onUnpair: () => Promise<void> }) {
   const [tab, setTab] = useState<Tab>("generate");
   const [mode, setMode] = useState<"image" | "video">("image");
-  const [prompt, setPrompt] = useState("");
+  const [prompts, setPrompts] = useState({ image: "", video: "" });
+  const prompt = prompts[mode];
+  const setPrompt = (value: string | ((previous: string) => string)) => setPrompts((previous) => updateModePrompt(previous, mode, typeof value === "function" ? value(previous[mode]) : value));
   const [references, setReferences] = useState<Ref[]>([]);
-  const [preset, setPreset] = useState("portrait_low");
-  const [frames, setFrames] = useState(124);
+  const [videoDraft, setVideoDraft] = useState<VideoDraft>({ ratio: "9:16", quality: 0.4, custom: false, width: "480", height: "864", frames: "124" });
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [message, setMessage] = useState("");
@@ -143,9 +147,13 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
     try {
       if (mode === "image") await api.createImageJob(prompt.trim(), refs);
       else {
-        const settings = validateVideoSettings(preset, frames);
+        const calculated = calculateVideoDimensions(videoDraft.ratio, videoDraft.quality);
+        const width = videoDraft.custom ? Number(videoDraft.width) : calculated.width;
+        const height = videoDraft.custom ? Number(videoDraft.height) : calculated.height;
+        const frames = Number(videoDraft.frames);
+        const settings = validateVideoSettings(width, height, frames);
         if (!settings.ok) { setMessage(settings.error); return; }
-        await api.createVideoJob(prompt.trim(), refs, preset, frames);
+        await api.createVideoJob(prompt.trim(), refs, width, height, frames);
       }
       setMessage("任务已进入队列");
       setTab("tasks");
@@ -157,8 +165,8 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
   return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><View style={styles.appShell}>
     <View style={styles.header}><View><Text style={styles.headerTitle}>Remote ComfyUI</Text><Text style={styles.headerSub}>{pairing.baseUrl}</Text></View><View style={styles.statusDot} /></View>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      {tab === "generate" && <GeneratePage mode={mode} setMode={setMode} prompt={prompt} setPrompt={(value) => setPrompt(renumberPictureTokens(value, references.map((item) => item.assetId)))} references={currentRefs} onPick={pickReferences} onMove={(from, to) => replaceReferences(moveReference(references, from, to))} onRemove={(index) => replaceReferences(references.filter((_, itemIndex) => itemIndex !== index))} onInsert={(index) => setPrompt((value) => insertPictureToken(value, index))} preset={preset} frames={frames} setPreset={setPreset} setFrames={setFrames} onSubmit={submit} busy={busy} message={message} />}
-      {tab === "tasks" && <TasksPage jobs={jobs} onRefresh={refreshJobs} api={api} />}
+      {tab === "generate" && <GeneratePage mode={mode} setMode={setMode} prompt={prompt} setPrompt={(value) => setPrompt(renumberPictureTokens(value, references.map((item) => item.assetId)))} references={currentRefs} onPick={pickReferences} onMove={(from, to) => replaceReferences(moveReference(references, from, to))} onRemove={(index) => replaceReferences(references.filter((_, itemIndex) => itemIndex !== index))} onInsert={(index) => setPrompt((value) => insertPictureToken(value, index))} videoDraft={videoDraft} setVideoDraft={setVideoDraft} onSubmit={submit} busy={busy} message={message} />}
+      {tab === "tasks" && <TasksPage jobs={jobs} onRefresh={refreshJobs} />}
       {tab === "artifacts" && <ArtifactsPage artifacts={artifacts} api={api} onRefresh={refreshArtifacts} />}
       {tab === "library" && <LibraryPage api={api} onUse={async (image) => {
         const maximum = mode === "image" ? 3 : 9;
@@ -176,21 +184,26 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
   </View></SafeAreaView>;
 }
 
-function GeneratePage({ mode, setMode, prompt, setPrompt, references, onPick, onMove, onRemove, onInsert, preset, frames, setPreset, setFrames, onSubmit, busy, message }: { mode: "image" | "video"; setMode: (mode: "image" | "video") => void; prompt: string; setPrompt: (value: string) => void; references: ReferenceItem[]; onPick: () => Promise<void>; onMove: (from: number, to: number) => void; onRemove: (index: number) => void; onInsert: (index: number) => void; preset: string; frames: number; setPreset: (value: string) => void; setFrames: (value: number) => void; onSubmit: () => Promise<void>; busy: boolean; message: string }) {
+function GeneratePage({ mode, setMode, prompt, setPrompt, references, onPick, onMove, onRemove, onInsert, videoDraft, setVideoDraft, onSubmit, busy, message }: { mode: "image" | "video"; setMode: (mode: "image" | "video") => void; prompt: string; setPrompt: (value: string) => void; references: ReferenceItem[]; onPick: () => Promise<void>; onMove: (from: number, to: number) => void; onRemove: (index: number) => void; onInsert: (index: number) => void; videoDraft: VideoDraft; setVideoDraft: (value: VideoDraft) => void; onSubmit: () => Promise<void>; busy: boolean; message: string }) {
   return <View style={styles.page}><Text style={styles.pageTitle}>开始生成</Text><View style={styles.segment}><Pressable onPress={() => setMode("image")} style={[styles.segmentItem, mode === "image" && styles.segmentSelected]}><Text style={mode === "image" ? styles.segmentTextSelected : styles.segmentText}>图片编辑</Text></Pressable><Pressable onPress={() => setMode("video")} style={[styles.segmentItem, mode === "video" && styles.segmentSelected]}><Text style={mode === "video" ? styles.segmentTextSelected : styles.segmentText}>参考图生视频</Text></Pressable></View>
     <Text style={styles.fieldLabel}>提示词</Text><TextInput multiline textAlignVertical="top" value={prompt} onChangeText={setPrompt} placeholder="描述你想要的结果，可插入 <Picture N>" style={[styles.input, styles.promptInput]} />
     <View style={styles.rowBetween}><Text style={styles.fieldLabel}>参考图 ({references.length}/{mode === "image" ? 3 : 9})</Text><Pressable onPress={onPick} style={styles.textButton}><Text style={styles.textButtonText}>从手机选择</Text></Pressable></View>
     <ReferenceImageStrip items={references} onMove={onMove} onRemove={onRemove} onInsertToken={onInsert} />
-    {mode === "video" && <VideoSettings preset={preset} frames={frames} onPreset={setPreset} onFrames={setFrames} />}
+    {mode === "video" && <VideoSettings value={videoDraft} onChange={setVideoDraft} />}
     {message ? <Text style={message.includes("已进入") ? styles.success : styles.error}>{message}</Text> : null}<PrimaryButton title={busy ? "处理中..." : mode === "image" ? "提交图片任务" : "提交视频任务"} onPress={onSubmit} disabled={busy} />
   </View>;
 }
 
-function TasksPage({ jobs, onRefresh, api }: { jobs: GenerationJob[]; onRefresh: () => Promise<void>; api: RemoteApi }) {
-  return <View style={styles.page}><View style={styles.rowBetween}><Text style={styles.pageTitle}>任务</Text><Pressable onPress={onRefresh} style={styles.textButton}><Text style={styles.textButtonText}>刷新</Text></Pressable></View>{jobs.length === 0 ? <Text style={styles.emptyPage}>还没有任务</Text> : jobs.map((job) => <View key={job.id} style={styles.rowItem}><View style={styles.rowMain}><Text style={styles.rowTitle}>{job.kind === "image" ? "图片编辑" : "参考图生视频"}</Text><Text style={styles.rowSub}>{job.id.slice(-8)} · {job.status}</Text>{job.error ? <Text style={styles.error}>{job.error}</Text> : null}</View><Text style={styles.status}>{job.artifacts.length ? `${job.artifacts.length} 个产物` : ""}</Text></View>)}</View>;
+function TasksPage({ jobs, onRefresh }: { jobs: GenerationJob[]; onRefresh: () => Promise<void> }) {
+  const [now, setNow] = useState(Date.now() / 1000);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now() / 1000), 1000); return () => clearInterval(timer); }, []);
+  return <View style={styles.page}><View style={styles.rowBetween}><Text style={styles.pageTitle}>任务</Text><Pressable onPress={onRefresh} style={styles.textButton}><Text style={styles.textButtonText}>刷新</Text></Pressable></View>{jobs.length === 0 ? <Text style={styles.emptyPage}>还没有任务</Text> : jobs.map((job) => <View key={job.id} style={styles.rowItem}><View style={styles.rowMain}><Text style={styles.rowTitle}>{job.kind === "image" ? "图片编辑" : "参考图生视频"}</Text><Text style={styles.rowSub}>{job.id.slice(-8)} · {job.status}</Text>{job.status === "running" && job.started_at ? <Text style={styles.status}>{formatElapsed(job.started_at, now)}</Text> : null}{job.error ? <Text style={styles.error}>{job.error}</Text> : null}</View><Text style={styles.status}>{job.artifacts.length ? `${job.artifacts.length} 个产物` : ""}</Text></View>)}</View>;
 }
 
 function ArtifactsPage({ artifacts, api, onRefresh }: { artifacts: Artifact[]; api: RemoteApi; onRefresh: () => Promise<void> }) {
+  const [selected, setSelected] = useState<Artifact | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [deleting, setDeleting] = useState<string | null>(null);
   async function saveOrShare(artifact: Artifact, share: boolean) {
     try {
       const url = api.mediaUrl(`/api/v1/artifacts/${encodeURIComponent(artifact.id)}/content`);
@@ -200,7 +213,25 @@ function ArtifactsPage({ artifacts, api, onRefresh }: { artifacts: Artifact[]; a
       else { const permission = await MediaLibrary.requestPermissionsAsync(); if (permission.granted) await MediaLibrary.saveToLibraryAsync(result.uri); }
     } catch (cause) { Alert.alert("保存失败", errorText(cause)); }
   }
-  return <View style={styles.page}><View style={styles.rowBetween}><Text style={styles.pageTitle}>产物</Text><Pressable onPress={onRefresh} style={styles.textButton}><Text style={styles.textButtonText}>刷新</Text></Pressable></View>{artifacts.length === 0 ? <Text style={styles.emptyPage}>生成完成的产物会显示在这里</Text> : artifacts.map((artifact) => { const url = api.mediaUrl(`/api/v1/artifacts/${encodeURIComponent(artifact.id)}/content`); return <View key={artifact.id} style={styles.artifact}><View style={styles.preview}>{artifact.mime_type.startsWith("image/") ? <Image source={{ uri: url, headers: { Authorization: `Bearer ${getToken(api)}` } }} style={styles.previewImage} /> : <Text style={styles.videoMark}>VIDEO</Text>}</View><Text style={styles.rowSub}>{artifact.mime_type} · {Math.round(artifact.size / 1024)} KB</Text><View style={styles.actions}><Pressable onPress={() => saveOrShare(artifact, false)} style={styles.secondaryButton}><Text>保存到相册</Text></Pressable><Pressable onPress={() => saveOrShare(artifact, true)} style={styles.secondaryButton}><Text>分享</Text></Pressable><Pressable onPress={() => Linking.openURL(url)} style={styles.secondaryButton}><Text>打开</Text></Pressable></View></View>; })}</View>;
+  async function remove(artifact: Artifact) {
+    setDeleting(artifact.id);
+    try { await api.deleteArtifact(artifact.id); if (selected?.id === artifact.id) setSelected(null); await onRefresh(); }
+    catch (cause) { Alert.alert("删除失败", errorText(cause)); }
+    finally { setDeleting(null); }
+  }
+  const confirmDelete = (artifact: Artifact) => Alert.alert("删除电脑上的产物", "这会永久删除 Gateway 保存的产物文件，无法恢复。电脑图库原图不会删除。", [{ text: "取消", style: "cancel" }, { text: "永久删除", style: "destructive", onPress: () => void remove(artifact) }]);
+  return <View style={styles.page}><View style={styles.rowBetween}><Text style={styles.pageTitle}>产物</Text><Pressable onPress={onRefresh} style={styles.textButton}><Text style={styles.textButtonText}>刷新</Text></Pressable></View>{artifacts.length === 0 ? <Text style={styles.emptyPage}>生成完成的产物会显示在这里</Text> : artifacts.map((artifact) => { const url = api.mediaUrl(`/api/v1/artifacts/${encodeURIComponent(artifact.id)}/content`); return <View key={artifact.id} style={styles.artifact}><Pressable accessibilityLabel={artifact.mime_type.startsWith("image/") ? "放大预览图片" : "预览视频"} onPress={() => { setZoom(1); setSelected(artifact); }} style={styles.preview}>{artifact.mime_type.startsWith("image/") ? <Image source={{ uri: url, headers: { Authorization: `Bearer ${getToken(api)}` } }} style={styles.previewImage} /> : <Text style={styles.videoMark}>▶ 点击预览视频</Text>}</Pressable><Text style={styles.rowSub}>{artifact.mime_type} · {Math.round(artifact.size / 1024)} KB</Text><View style={styles.actions}><Pressable onPress={() => saveOrShare(artifact, false)} style={styles.secondaryButton}><Text>保存</Text></Pressable><Pressable onPress={() => saveOrShare(artifact, true)} style={styles.secondaryButton}><Text>分享</Text></Pressable><Pressable onPress={() => { setZoom(1); setSelected(artifact); }} style={styles.secondaryButton}><Text>预览</Text></Pressable><Pressable disabled={deleting === artifact.id} onPress={() => confirmDelete(artifact)} style={styles.secondaryButton}><Text style={styles.dangerText}>{deleting === artifact.id ? "删除中" : "删除"}</Text></Pressable></View></View>; })}
+    <Modal visible={selected !== null} animationType="slide" onRequestClose={() => setSelected(null)}><SafeAreaView style={styles.viewer}><View style={styles.viewerHeader}><Pressable onPress={() => setSelected(null)}><Text style={styles.viewerControl}>关闭</Text></Pressable>{selected?.mime_type.startsWith("image/") && <View style={styles.viewerZoom}><Pressable onPress={() => setZoom(Math.max(1, zoom - 0.5))}><Text style={styles.viewerControl}>－</Text></Pressable><Text style={styles.viewerText}>{zoom.toFixed(1)}×</Text><Pressable onPress={() => setZoom(Math.min(4, zoom + 0.5))}><Text style={styles.viewerControl}>＋</Text></Pressable></View>}</View>
+      {selected?.mime_type.startsWith("image/") && <ScrollView horizontal maximumZoomScale={4} contentContainerStyle={styles.viewerScroll}><ScrollView contentContainerStyle={styles.viewerScroll}><Image source={{ uri: api.mediaUrl(`/api/v1/artifacts/${encodeURIComponent(selected.id)}/content`), headers: { Authorization: `Bearer ${getToken(api)}` } }} style={{ width: 340 * zoom, height: 520 * zoom }} resizeMode="contain" /></ScrollView></ScrollView>}
+      {selected?.mime_type.startsWith("video/") && <VideoPreview artifact={selected} api={api} />}
+      {selected && !selected.mime_type.startsWith("image/") && !selected.mime_type.startsWith("video/") && <Text style={styles.viewerText}>该文件暂不支持应用内预览，可保存后用其他应用打开。</Text>}
+    </SafeAreaView></Modal>
+  </View>;
+}
+
+function VideoPreview({ artifact, api }: { artifact: Artifact; api: RemoteApi }) {
+  const player = useVideoPlayer({ uri: api.mediaUrl(`/api/v1/artifacts/${encodeURIComponent(artifact.id)}/content`), headers: { Authorization: `Bearer ${getToken(api)}` } });
+  return <VideoView player={player} nativeControls style={styles.videoPlayer} />;
 }
 
 function LibraryPage({ api, onUse }: { api: RemoteApi; onUse: (image: LibraryImage) => Promise<void> }) {
@@ -222,5 +253,12 @@ function getToken(api: RemoteApi): string { return api.token || ""; }
 function errorText(cause: unknown): string { return cause instanceof Error ? cause.message : "请求失败，请检查 Gateway 状态"; }
 
 const styles = StyleSheet.create({
+  viewer: { flex: 1, backgroundColor: "#101827" },
+  viewerHeader: { minHeight: 58, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  viewerZoom: { flexDirection: "row", alignItems: "center", gap: 18 },
+  viewerControl: { color: "#fff", fontSize: 18, fontWeight: "700", padding: 8 },
+  viewerText: { color: "#fff", fontSize: 15 },
+  viewerScroll: { flexGrow: 1, alignItems: "center", justifyContent: "center" },
+  videoPlayer: { width: "100%", aspectRatio: 16 / 9, marginTop: 60 },
   safe: { flex: 1, backgroundColor: "#f7f8fa" }, centerContent: { flex: 1, justifyContent: "center", padding: 20 }, pairPanel: { backgroundColor: "#fff", borderRadius: 10, padding: 22, borderWidth: 1, borderColor: "#e0e5ec" }, brand: { color: "#14243a", fontSize: 26, fontWeight: "800" }, subtitle: { color: "#64748b", marginTop: 5, marginBottom: 24 }, fieldLabel: { color: "#334155", fontWeight: "700", marginTop: 12, marginBottom: 6 }, input: { minHeight: 44, borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 6, paddingHorizontal: 12, backgroundColor: "#fff", color: "#182333" }, promptInput: { minHeight: 120, paddingTop: 12 }, hint: { color: "#64748b", fontSize: 12, lineHeight: 18, marginTop: 14 }, error: { color: "#b42318", marginTop: 10, lineHeight: 19 }, success: { color: "#19703b", marginTop: 10 }, appShell: { flex: 1 }, header: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" }, headerTitle: { color: "#14243a", fontSize: 18, fontWeight: "800" }, headerSub: { color: "#64748b", fontSize: 11, marginTop: 2 }, statusDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#2ca66f" }, content: { padding: 16, paddingBottom: 26 }, page: { gap: 8 }, pageTitle: { color: "#16263d", fontSize: 22, fontWeight: "800", marginBottom: 4 }, segment: { flexDirection: "row", padding: 3, borderRadius: 7, backgroundColor: "#e8ecf2", marginBottom: 8 }, segmentItem: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 5 }, segmentSelected: { backgroundColor: "#fff" }, segmentText: { color: "#64748b", fontWeight: "700" }, segmentTextSelected: { color: "#1769aa", fontWeight: "800" }, rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, textButton: { padding: 8 }, textButtonText: { color: "#1769aa", fontWeight: "700" }, primaryButton: { minHeight: 46, borderRadius: 6, backgroundColor: "#1769aa", alignItems: "center", justifyContent: "center", marginTop: 18 }, primaryText: { color: "#fff", fontWeight: "800" }, disabled: { opacity: 0.55 }, tabBar: { minHeight: 62, flexDirection: "row", backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: "#e5e7eb" }, tab: { flex: 1, justifyContent: "center", alignItems: "center", borderTopWidth: 2, borderTopColor: "transparent" }, tabActive: { borderTopColor: "#1769aa" }, tabText: { color: "#64748b", fontSize: 12 }, tabTextActive: { color: "#1769aa", fontWeight: "800" }, emptyPage: { color: "#64748b", textAlign: "center", paddingVertical: 40 }, rowItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#d8dde5" }, rowMain: { flex: 1 }, rowTitle: { color: "#1e293b", fontWeight: "700" }, rowSub: { color: "#64748b", fontSize: 12, marginTop: 4 }, status: { color: "#1769aa", fontSize: 12 }, artifact: { paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#d8dde5" }, preview: { height: 170, backgroundColor: "#e8ecf2", borderRadius: 7, alignItems: "center", justifyContent: "center", overflow: "hidden" }, previewImage: { width: "100%", height: "100%", resizeMode: "contain" }, videoMark: { color: "#1769aa", fontWeight: "800" }, actions: { flexDirection: "row", gap: 7, marginTop: 8 }, secondaryButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 5, backgroundColor: "#eef2f7", justifyContent: "center" }, libraryTabs: { gap: 7, paddingVertical: 5 }, libraryTab: { borderRadius: 5, backgroundColor: "#e8ecf2", paddingHorizontal: 12, paddingVertical: 9 }, libraryTabActive: { backgroundColor: "#d5eafb" }, imageGrid: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginTop: 8 }, libraryImage: { width: "31.5%", gap: 3 }, libraryThumb: { width: "100%", aspectRatio: 1, borderRadius: 5, backgroundColor: "#e8ecf2" }, imageName: { color: "#475569", fontSize: 11 }, mono: { color: "#475569", fontSize: 12, paddingVertical: 5 }, dangerButton: { minHeight: 44, borderRadius: 6, borderWidth: 1, borderColor: "#d92d20", alignItems: "center", justifyContent: "center", marginTop: 26 }, dangerText: { color: "#b42318", fontWeight: "700" },
 });

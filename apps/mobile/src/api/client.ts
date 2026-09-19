@@ -6,6 +6,7 @@ export type GenerationJob = {
   error?: string | null;
   created_at?: number;
   updated_at?: number;
+  started_at?: number | null;
   artifacts: Artifact[];
 };
 
@@ -55,15 +56,7 @@ export class RemoteApi {
   }
 
   async importLibraryImage(image: LibraryImage): Promise<{ id: string; filename: string; mime_type: string; size: number }> {
-    const response = await fetch(this.mediaUrl(image.content_url), { headers: this.authHeaders() });
-    if (!response.ok) throw new Error(`读取图库图片失败（HTTP ${response.status}）`);
-    const blob = await response.blob();
-    const form = new FormData();
-    form.append("files", blob, image.name);
-    const result = await this.request<{ assets: Array<{ id: string; filename: string; mime_type: string; size: number }> }>("/api/v1/uploads/images", { method: "POST", body: form });
-    const uploaded = result.assets[0];
-    if (!uploaded) throw new Error("图库图片上传失败");
-    return uploaded;
+    return this.request(`/api/v1/library-images/${encodeURIComponent(image.id)}/import`, { method: "POST" });
   }
 
   async createImageJob(prompt: string, referenceAssetIds: string[]): Promise<GenerationJob> {
@@ -73,10 +66,10 @@ export class RemoteApi {
     });
   }
 
-  async createVideoJob(prompt: string, referenceAssetIds: string[], resolutionPreset: string, frames: number): Promise<GenerationJob> {
+  async createVideoJob(prompt: string, referenceAssetIds: string[], width: number, height: number, frames: number): Promise<GenerationJob> {
     return this.request("/api/v1/jobs/video", {
       method: "POST",
-      body: { prompt, referenceAssetIds, resolutionPreset, frames },
+      body: { prompt, referenceAssetIds, width, height, frames },
     });
   }
 
@@ -94,6 +87,10 @@ export class RemoteApi {
 
   async listArtifacts(): Promise<{ artifacts: Artifact[] }> {
     return this.request("/api/v1/artifacts");
+  }
+
+  async deleteArtifact(id: string): Promise<void> {
+    await this.request(`/api/v1/artifacts/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   async listLibraries(): Promise<{ libraries: Library[] }> {

@@ -40,6 +40,9 @@ class Database:
                 CREATE TABLE IF NOT EXISTS library_roots (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL, recursive INTEGER NOT NULL, enabled INTEGER NOT NULL);
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "started_at" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN started_at REAL")
 
     @staticmethod
     def json_dumps(value: Any) -> str:
