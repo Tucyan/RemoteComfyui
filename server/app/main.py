@@ -40,11 +40,11 @@ def _build_app(settings: Settings, health_probe: HealthProbe | None) -> FastAPI:
                 comfyui=ComfyUIHealth(
                     status="online" if online else "offline",
                     version=result.get("version"),
-                    error=result.get("error"),
+                    error=result.get("error") if online else "ComfyUI health check failed",
                 ),
             )
-        except Exception:
-            logger.exception("ComfyUI health probe failed")
+        except Exception as exc:
+            logger.error("ComfyUI health probe failed (%s)", type(exc).__name__)
             return HealthResponse(
                 gateway=GatewayHealth(),
                 comfyui=ComfyUIHealth(status="offline", error="ComfyUI health check failed"),
