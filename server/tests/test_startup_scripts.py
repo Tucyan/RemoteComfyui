@@ -23,6 +23,11 @@ def test_scripts_keep_comfyui_loopback_and_use_separate_admin_listener():
     assert '"--port", "8188"' not in server
     assert "PublicPort 必须" in server
     assert "AdminHost 必须" in admin
+    autostart = (ROOT / "scripts" / "install-autostart.ps1").read_text(encoding="utf-8")
+    assert '[string]$DataDir' in autostart
+    assert 'if ($Remove)' in autostart
+    assert autostart.index('if ($Remove)') < autostart.index('Get-Command python')
+    assert ' -DataDir $quote$resolvedDataDir$quote' in autostart
 
 
 def test_scripts_do_not_launch_comfyui_or_forward_the_admin_listener():

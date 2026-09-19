@@ -2,6 +2,7 @@
 param(
     [string]$ProjectRoot = "",
     [string]$PythonExe = "",
+    [string]$DataDir = "",
     [string]$TaskPrefix = "RemoteComfyUI",
     [switch]$Remove
 )
@@ -12,6 +13,16 @@ if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
     $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 } else {
     $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
+
+if ($Remove) {
+    foreach ($task in @("$TaskPrefix Gateway", "$TaskPrefix Admin")) {
+        if ($PSCmdlet.ShouldProcess($task, "删除登录启动任务")) {
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Host "已移除：$TaskPrefix Gateway / $TaskPrefix Admin"
+    exit 0
 }
 
 if ([string]::IsNullOrWhiteSpace($PythonExe)) {
@@ -39,15 +50,11 @@ $common = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden"
 $quote = [char]34
 $serverArgs = "$common -File $quote$serverScript$quote -ProjectRoot $quote$ProjectRoot$quote -PythonExe $quote$PythonExe$quote"
 $adminArgs = "$common -File $quote$adminScript$quote -ProjectRoot $quote$ProjectRoot$quote -PythonExe $quote$PythonExe$quote"
-
-if ($Remove) {
-    foreach ($task in @($serverTask, $adminTask)) {
-        if ($PSCmdlet.ShouldProcess($task, "删除登录启动任务")) {
-            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-        }
-    }
-    Write-Host "已移除：$serverTask / $adminTask"
-    exit 0
+if (-not [string]::IsNullOrWhiteSpace($DataDir)) {
+    $resolvedDataDir = if ([System.IO.Path]::IsPathRooted($DataDir)) { $DataDir } else { Join-Path $ProjectRoot $DataDir }
+    $resolvedDataDir = [System.IO.Path]::GetFullPath($resolvedDataDir)
+    $serverArgs += " -DataDir $quote$resolvedDataDir$quote"
+    $adminArgs += " -DataDir $quote$resolvedDataDir$quote"
 }
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME

@@ -66,6 +66,12 @@ Python 不在 PATH 时指定完整路径：
   -PublicPort 3000
 ```
 
+如果使用自定义 `DataDir`，管理页也必须使用同一个目录：
+
+```powershell
+.\scripts\start-admin.ps1 -DataDir "D:\RemoteComfyUI\data"
+```
+
 `start-admin.ps1` 始终默认绑定 `127.0.0.1`，不能从手机或其他局域网设备访问。不要把 `ComfyUI` 的启动参数改成 `--listen 0.0.0.0`，也不要为 8188 创建防火墙入站规则。
 
 浏览器打开：
@@ -136,6 +142,8 @@ New-NetFirewallRule `
 ```powershell
 .\scripts\install-autostart.ps1 -ProjectRoot (Get-Location).Path
 ```
+
+自定义数据目录时，安装任务也传入同一个 `-DataDir`；卸载任务不依赖 Python 仍在 PATH 中。
 
 卸载：
 
