@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "Remote ComfyUI",
+    "slug": "remote-comfyui-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "remote-comfyui",
+    "android": {
+      "package": "com.remotecomfyui.mobile",
+      "usesCleartextTraffic": true
+    },
+    "plugins": ["expo-image-picker", "expo-secure-store"]
+  }
+}

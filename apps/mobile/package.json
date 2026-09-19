@@ -1,0 +1,32 @@
+{
+  "name": "remote-comfyui-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "export": "expo export --platform android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "expo": "~54.0.0",
+    "expo-file-system": "~19.0.6",
+    "expo-image-picker": "~17.0.0",
+    "expo-media-library": "~18.0.6",
+    "expo-secure-store": "~14.0.1",
+    "expo-sharing": "~13.0.1",
+    "expo-status-bar": "~3.0.0",
+    "react": "19.1.0",
+    "react-native": "0.81.4"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}
