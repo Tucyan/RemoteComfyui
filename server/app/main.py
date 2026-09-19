@@ -9,6 +9,9 @@ from typing import Any
 import httpx
 from fastapi import FastAPI
 
+from .api.admin import register_admin_routes
+from .libraries.service import LibraryService
+from .security import install_admin_guard
 from .schemas import ComfyUIHealth, GatewayHealth, HealthResponse
 from .settings import Settings
 
@@ -34,7 +37,7 @@ async def _default_health_probe(settings: Settings) -> Mapping[str, Any]:
     return {"online": True, "version": version}
 
 
-def _build_app(settings: Settings, health_probe: HealthProbe | None) -> FastAPI:
+def _build_app(settings: Settings, health_probe: HealthProbe | None, *, admin: bool = False, filesystem=None, library_service=None) -> FastAPI:
     app = FastAPI(title="Remote ComfyUI Gateway")
     probe = health_probe or (lambda: _default_health_probe(settings))
 
@@ -60,6 +63,11 @@ def _build_app(settings: Settings, health_probe: HealthProbe | None) -> FastAPI:
                 comfyui=ComfyUIHealth(status="offline", error="ComfyUI health check failed"),
             )
 
+    if admin:
+        app.state.admin_sessions = {}
+        install_admin_guard(app)
+        register_admin_routes(app, library_service or LibraryService(settings.data_dir, filesystem=filesystem))
+
     return app
 
 
@@ -70,5 +78,5 @@ def create_public_app(
     return _build_app(settings or Settings(), health_probe)
 
 
-def create_admin_app(settings: Settings | None = None) -> FastAPI:
-    return _build_app(settings or Settings(), None)
+def create_admin_app(settings: Settings | None = None, *, filesystem=None, library_service=None) -> FastAPI:
+    return _build_app(settings or Settings(), None, admin=True, filesystem=filesystem, library_service=library_service)
