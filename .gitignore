@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 server/data/
+data/
 
 # Node / Expo
 node_modules/
@@ -30,4 +31,3 @@ Thumbs.db
 
 # Worktrees
 .worktrees/
-
