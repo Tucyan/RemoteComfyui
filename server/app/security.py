@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import secrets
+import time
 from urllib.parse import urlparse
 
 from fastapi import Request
 from starlette.responses import JSONResponse
+
+from .db import Database
 
 
 def _loopback(value: str | None) -> bool:
@@ -76,3 +80,80 @@ def install_admin_guard(app) -> None:
         except PermissionError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=403)
         return await call_next(request)
+
+
+def _hash_token(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+class TokenService:
+    def __init__(self, database: Database | str):
+        self.db = database if isinstance(database, Database) else Database(database)
+
+    def issue(self, device_name: str) -> str:
+        if not isinstance(device_name, str) or not device_name.strip():
+            raise ValueError("device name is required")
+        raw = "rc_" + secrets.token_urlsafe(32)
+        now = time.time()
+        self.db.execute(
+            "INSERT INTO devices(id,name,token_hash,created_at) VALUES(?,?,?,?)",
+            (secrets.token_hex(16), device_name.strip()[:120], _hash_token(raw), now),
+        )
+        return raw
+
+    def verify(self, raw_token: str) -> dict[str, object]:
+        if not isinstance(raw_token, str) or not raw_token.startswith("rc_"):
+            raise PermissionError("invalid device token")
+        row = self.db.fetchone(
+            "SELECT id,name,created_at,last_seen_at,revoked_at FROM devices WHERE token_hash=?",
+            (_hash_token(raw_token),),
+        )
+        if row is None or row["revoked_at"] is not None:
+            raise PermissionError("invalid device token")
+        self.db.execute("UPDATE devices SET last_seen_at=? WHERE id=?", (time.time(), row["id"]))
+        return {"id": row["id"], "name": row["name"], "device_name": row["name"], "created_at": row["created_at"]}
+
+
+class PairingService(TokenService):
+    def __init__(self, database: Database | str, *, pairing_ttl: int = 300):
+        super().__init__(database)
+        self.pairing_ttl = max(1, int(pairing_ttl))
+
+    def create_pairing_code(self, *, now: float | None = None) -> str:
+        current = time.time() if now is None else now
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        self.db.execute(
+            "INSERT INTO pairings(id,code_hash,expires_at) VALUES(?,?,?)",
+            (secrets.token_hex(16), _hash_token(code), current + self.pairing_ttl),
+        )
+        return code
+
+    def redeem_pairing_code(self, code: str, device_name: str, *, now: float | None = None) -> str:
+        current = time.time() if now is None else now
+        if not isinstance(code, str) or not code.isdigit() or len(code) != 6:
+            raise ValueError("invalid or expired pairing code")
+        with self.db.transaction() as connection:
+            row = connection.execute(
+                "SELECT id,expires_at,used_at FROM pairings WHERE code_hash=?",
+                (_hash_token(code),),
+            ).fetchone()
+            if row is None or row["used_at"] is not None or current >= row["expires_at"]:
+                raise ValueError("invalid or expired pairing code")
+            raw = "rc_" + secrets.token_urlsafe(32)
+            connection.execute("UPDATE pairings SET used_at=? WHERE id=?", (current, row["id"]))
+            connection.execute(
+                "INSERT INTO devices(id,name,token_hash,created_at) VALUES(?,?,?,?)",
+                (secrets.token_hex(16), device_name.strip()[:120], _hash_token(raw), current),
+            )
+        return raw
+
+    def authenticate(self, raw_token: str) -> dict[str, object]:
+        return self.verify(raw_token)
+
+    def list_devices(self) -> list[dict[str, object]]:
+        rows = self.db.fetchall("SELECT id,name,token_hash,created_at,last_seen_at,revoked_at FROM devices ORDER BY created_at DESC")
+        return [dict(row) for row in rows]
+
+    def revoke_device(self, device_id: str) -> None:
+        if self.db.execute("UPDATE devices SET revoked_at=? WHERE id=?", (time.time(), device_id)) == 0:
+            raise KeyError(device_id)

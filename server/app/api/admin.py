@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..libraries.models import LibraryRoot
 from ..libraries.service import LibraryService, PathValidationError
-from ..security import get_or_create_session, require_csrf
+from ..security import PairingService, get_or_create_session, require_csrf
 
 
 class LibraryCreate(BaseModel):
@@ -29,8 +29,17 @@ class PathPayload(BaseModel):
     path: str
 
 
-def register_admin_routes(app, service: LibraryService) -> None:
+def register_admin_routes(app, service: LibraryService, pairing_factory=None) -> None:
     router = APIRouter(prefix="/admin/api")
+    pairing: PairingService | None = None
+
+    def get_pairing() -> PairingService:
+        nonlocal pairing
+        if pairing is None:
+            if pairing_factory is None:
+                raise HTTPException(status_code=503, detail="pairing service unavailable")
+            pairing = pairing_factory()
+        return pairing
 
     @router.get("/session")
     async def session(request: Request, response: Response):
@@ -38,6 +47,24 @@ def register_admin_routes(app, service: LibraryService) -> None:
         if fresh:
             response.set_cookie("admin_session", session_id, httponly=True, samesite="strict", secure=False, path="/")
         return {"csrf_token": csrf}
+
+    @router.post("/pairing-code")
+    async def pairing_code(request: Request):
+        require_csrf(request)
+        return {"code": get_pairing().create_pairing_code()}
+
+    @router.get("/devices")
+    async def devices():
+        return {"devices": [{"id": item["id"], "name": item["name"], "created_at": item["created_at"], "last_seen_at": item["last_seen_at"], "revoked": item["revoked_at"] is not None} for item in get_pairing().list_devices()]}
+
+    @router.delete("/devices/{device_id}", status_code=204)
+    async def revoke_device(device_id: str, request: Request):
+        require_csrf(request)
+        try:
+            get_pairing().revoke_device(device_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="device not found") from exc
+        return Response(status_code=204)
 
     @router.get("/filesystem/drives")
     async def drives():

@@ -73,6 +73,31 @@ async def test_admin_session_and_library_mutations_require_csrf_and_loopback(tmp
             "directories": ["C:\\Pictures"]
         }
         assert (await client.post("/admin/api/filesystem/validate", json={"path": "C:\\Pictures"})).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_create_list_and_revoke_pairing_devices(tmp_path):
+    app = create_admin_app(_settings(tmp_path), filesystem=FakeFS())
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:3001") as client:
+        session = await client.get("/admin/api/session")
+        csrf = session.json()["csrf_token"]
+        headers = {"x-csrf-token": csrf}
+        created = await client.post("/admin/api/pairing-code", headers=headers)
+        assert created.status_code == 200
+        code = created.json()["code"]
+        assert len(code) == 6 and code.isdigit()
+        public = create_public_app(_settings(tmp_path))
+        public_transport = httpx.ASGITransport(app=public)
+        async with httpx.AsyncClient(transport=public_transport, base_url="http://127.0.0.1:3000") as public_client:
+            paired = await public_client.post("/api/v1/pair", json={"code": code, "name": "phone"})
+        assert paired.status_code == 200
+        devices = await client.get("/admin/api/devices")
+        assert devices.json()["devices"][0]["name"] == "phone"
+        device_id = devices.json()["devices"][0]["id"]
+        revoked = await client.delete(f"/admin/api/devices/{device_id}", headers=headers)
+        assert revoked.status_code == 204
+        assert (await client.get("/admin/api/devices")).json()["devices"][0]["revoked"] is True
         validated = await client.post(
             "/admin/api/filesystem/validate",
             json={"path": "C:\\Pictures"},
