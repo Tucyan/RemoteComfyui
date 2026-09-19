@@ -40,6 +40,20 @@ async def test_public_app_does_not_expose_admin_routes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_admin_libraries_is_empty_when_data_dir_and_config_are_missing(tmp_path):
+    data_dir = tmp_path / "missing-data"
+    app = create_admin_app(_settings(data_dir), filesystem=FakeFS())
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:3001") as client:
+        response = await client.get("/admin/api/libraries")
+
+    assert response.status_code == 200
+    assert response.json() == {"libraries": []}
+    assert not data_dir.exists()
+
+
+@pytest.mark.asyncio
 async def test_admin_session_and_library_mutations_require_csrf_and_loopback(tmp_path):
     app = create_admin_app(_settings(tmp_path), filesystem=FakeFS())
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))

@@ -50,6 +50,21 @@ def test_rejects_path_attacks_and_duplicate_or_nested_roots(tmp_path):
         service.create(LibraryRoot(id="dup", name="Duplicate", path="C:\\Pictures"))
 
 
+@pytest.mark.parametrize("path", [r"\\?\C:\Pictures", r"\\.\C:\Pictures"])
+def test_rejects_windows_device_paths(tmp_path, path):
+    service = LibraryService(tmp_path, filesystem=FakeFS())
+    with pytest.raises(PathValidationError):
+        service.validate_path(path)
+
+
+def test_load_returns_empty_when_data_dir_and_config_are_missing(tmp_path):
+    data_dir = tmp_path / "missing-data"
+    service = LibraryService(data_dir, filesystem=FakeFS())
+
+    assert service.load() == []
+    assert not data_dir.exists()
+
+
 def test_atomic_update_keeps_backups_and_never_deletes_source(tmp_path):
     source = tmp_path / "original.png"
     source.write_bytes(b"keep")
