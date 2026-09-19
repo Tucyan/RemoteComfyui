@@ -211,6 +211,42 @@ async def test_admin_serves_spa_and_falls_back_for_nested_admin_paths(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_admin_serves_bundled_assets_under_admin_prefix(tmp_path):
+    static_dir = tmp_path / "dist"
+    assets_dir = static_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text('<script src="/admin/assets/app.js"></script>', encoding="utf-8")
+    (assets_dir / "app.js").write_text("window.adminReady = true;", encoding="utf-8")
+    app = create_admin_app(_settings(tmp_path), filesystem=FakeFS(), static_dir=static_dir)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:3001") as client:
+        page = await client.get("/admin")
+        asset = await client.get("/admin/assets/app.js")
+    assert '/admin/assets/app.js' in page.text
+    assert asset.status_code == 200
+    assert asset.text == "window.adminReady = true;"
+
+
+@pytest.mark.asyncio
+async def test_admin_relative_static_dir_and_missing_asset(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    static_dir = tmp_path / "dist"
+    assets_dir = static_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>admin shell</html>", encoding="utf-8")
+    (assets_dir / "app.js").write_text("window.ready = true;", encoding="utf-8")
+    app = create_admin_app(_settings(tmp_path), filesystem=FakeFS(), static_dir="dist")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:3001") as client:
+        existing = await client.get("/admin/assets/app.js")
+        missing = await client.get("/admin/assets/missing.js")
+        nested = await client.get("/admin/libraries")
+    assert existing.status_code == 200 and existing.text == "window.ready = true;"
+    assert missing.status_code == 404
+    assert nested.status_code == 200 and "admin shell" in nested.text
+
+
+@pytest.mark.asyncio
 async def test_admin_without_static_build_returns_clear_503(tmp_path):
     app = create_admin_app(_settings(tmp_path), filesystem=FakeFS(), static_dir=tmp_path / "missing-dist")
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 1234))

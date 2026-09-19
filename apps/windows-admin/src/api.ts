@@ -71,7 +71,9 @@ export async function loadDirectories(path: string) {
 }
 
 export async function validatePath(path: string) {
-  return (await request<{ valid: boolean; path: string }>("/admin/api/filesystem/validate", { method: "POST", body: JSON.stringify({ path }) }, true)).path;
+  const result = await request<{ valid: boolean; path: string }>("/admin/api/filesystem/validate", { method: "POST", body: JSON.stringify({ path }) }, true);
+  if (result.valid !== true || typeof result.path !== "string" || !result.path.trim()) throw new ApiError("目录验证失败，请检查路径。", 502);
+  return result.path;
 }
 
 export function createLibrary(payload: Omit<Library, "id"> & { id?: string }) {

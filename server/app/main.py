@@ -44,7 +44,7 @@ def _default_admin_static_dir() -> Path:
 
 
 def _install_admin_ui(app: FastAPI, static_dir: str | Path | None) -> None:
-    root = Path(static_dir) if static_dir is not None else _default_admin_static_dir()
+    root = (Path(static_dir) if static_dir is not None else _default_admin_static_dir()).resolve()
     index = root / "index.html"
 
     def render_index() -> FileResponse | HTMLResponse:
@@ -66,6 +66,8 @@ def _install_admin_ui(app: FastAPI, static_dir: str | Path | None) -> None:
         requested = root / path
         if requested.is_file() and root in requested.resolve().parents:
             return FileResponse(requested)
+        if path.startswith("assets/") or path == "favicon.ico":
+            return HTMLResponse("Not Found", status_code=404)
         return render_index()
 
 
