@@ -1,7 +1,10 @@
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.libraries.models import LibraryRoot
 from app.libraries.service import LibraryService, PathValidationError, WindowsFilesystem
@@ -125,6 +128,57 @@ def test_save_retains_only_five_config_backups(tmp_path):
         "config.yaml.bak.5",
     ]
     assert not (tmp_path / "config.yaml.bak.6").exists()
+
+
+def test_concurrent_creates_keep_both_roots_and_valid_yaml(tmp_path):
+    class OverlappingFS(FakeFS):
+        def __init__(self):
+            super().__init__()
+            self._dirs["C:\\Pictures2"] = []
+            self._valid_paths = {"C:\\Pictures", "C:\\Pictures2"}
+            self._calls = 0
+            self._calls_lock = threading.Lock()
+            self.first_validating = threading.Event()
+            self.second_loaded = threading.Event()
+
+        def validate_directory(self, path):
+            with self._calls_lock:
+                self._calls += 1
+                call = self._calls
+            if call == 1:
+                self.first_validating.set()
+                # Without transaction locking, the second create has loaded
+                # the same stale document before the first write proceeds.
+                self.second_loaded.wait(timeout=2)
+            elif call == 2:
+                self.second_loaded.set()
+                while not (tmp_path / "config.yaml").exists():
+                    if not self.first_validating.wait(timeout=0.01):
+                        break
+            if path in self._valid_paths:
+                return path
+            return super().validate_directory(path)
+
+    filesystem = OverlappingFS()
+    first = LibraryService(tmp_path, filesystem=filesystem)
+    second = LibraryService(tmp_path, filesystem=filesystem)
+
+    def create(service, library):
+        return service.create(library)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(create, first, LibraryRoot(id="pictures", name="Pictures", path="C:\\Pictures"))
+        assert filesystem.first_validating.wait(timeout=2)
+        second_future = executor.submit(create, second, LibraryRoot(id="pictures2", name="Pictures 2", path="C:\\Pictures2"))
+        assert first_future.result(timeout=5).id == "pictures"
+        assert second_future.result(timeout=5).id == "pictures2"
+
+    payload = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert {row["id"] for row in payload["libraries"]} == {"pictures", "pictures2"}
+    for backup in sorted(tmp_path.glob("config.yaml.bak.*")):
+        backup_payload = yaml.safe_load(backup.read_text(encoding="utf-8"))
+        assert isinstance(backup_payload, dict)
+        assert isinstance(backup_payload.get("libraries"), list)
 
 
 def test_windows_directory_provider_filters_files_hidden_system_denied_and_caps(monkeypatch):

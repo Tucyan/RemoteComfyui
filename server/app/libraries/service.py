@@ -6,8 +6,11 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 import yaml
 
@@ -24,6 +27,10 @@ class LibraryConfigError(ValueError):
 
 class FilesystemProviderError(RuntimeError):
     """The injected filesystem provider failed independently of path validity."""
+
+
+class LibraryLockError(FilesystemProviderError):
+    """The library configuration lock could not be acquired before its deadline."""
 
 
 class FilesystemProvider(Protocol):
@@ -120,10 +127,21 @@ def _is_parent(parent: str, child: str) -> bool:
 
 
 class LibraryService:
-    def __init__(self, data_dir: str | Path, filesystem: FilesystemProvider | None = None):
+    _process_locks: dict[str, Any] = {}
+    _process_locks_guard = threading.Lock()
+
+    def __init__(
+        self,
+        data_dir: str | Path,
+        filesystem: FilesystemProvider | None = None,
+        *,
+        lock_timeout: float = 10.0,
+    ):
         self.data_dir = Path(data_dir)
         self.config_path = self.data_dir / "config.yaml"
+        self.lock_path = self.data_dir / ".config.lock"
         self.filesystem = filesystem or WindowsFilesystem()
+        self.lock_timeout = max(0.0, float(lock_timeout))
 
     def list_drives(self) -> list[str]:
         try:
@@ -179,6 +197,12 @@ class LibraryService:
         return any(str(drive)[:2].upper() == prefix and not str(drive).startswith(("\\\\", "//")) for drive in drives)
 
     def load(self) -> list[LibraryRoot]:
+        if not self.data_dir.exists():
+            return []
+        with self._configuration_lock():
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> list[LibraryRoot]:
         if not self.config_path.exists():
             return []
         try:
@@ -202,9 +226,13 @@ class LibraryService:
             raise ValueError("invalid library configuration") from exc
 
     def save(self, libraries: list[LibraryRoot]) -> None:
-        validated = self._validate_libraries(libraries)
+        with self._configuration_lock(create=True):
+            validated = self._validate_libraries(libraries)
+            self._save_unlocked(validated)
+
+    def _save_unlocked(self, libraries: list[LibraryRoot]) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        payload = {"libraries": [library.to_dict() for library in validated]}
+        payload = {"libraries": [library.to_dict() for library in libraries]}
         encoded = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True).encode("utf-8")
         if self.config_path.exists():
             for index in range(5, 1, -1):
@@ -231,6 +259,80 @@ class LibraryService:
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
+
+    @classmethod
+    def _process_lock_for(cls, path: Path) -> Any:
+        key = os.path.normcase(str(path.resolve(strict=False)))
+        with cls._process_locks_guard:
+            lock = cls._process_locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                cls._process_locks[key] = lock
+            return lock
+
+    @contextmanager
+    def _configuration_lock(self, *, create: bool = False) -> Iterator[None]:
+        if create:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        elif not self.data_dir.exists():
+            yield
+            return
+
+        process_lock = self._process_lock_for(self.lock_path)
+        if not process_lock.acquire(timeout=self.lock_timeout):
+            raise LibraryLockError("library configuration lock unavailable")
+        handle = None
+        try:
+            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = self.lock_path.open("a+b")
+            self._acquire_file_lock(handle)
+        except Exception:
+            if handle is not None:
+                handle.close()
+            process_lock.release()
+            raise
+        try:
+            yield
+        finally:
+            try:
+                self._release_file_lock(handle)
+            finally:
+                handle.close()
+                process_lock.release()
+
+    def _acquire_file_lock(self, handle: Any) -> None:
+        deadline = time.monotonic() + self.lock_timeout
+        while True:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except (OSError, BlockingIOError) as exc:
+                if time.monotonic() >= deadline:
+                    raise LibraryLockError("library configuration lock unavailable") from exc
+                time.sleep(min(0.05, max(0.001, deadline - time.monotonic())))
+
+    @staticmethod
+    def _release_file_lock(handle: Any) -> None:
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
 
     @staticmethod
     def _from_dict(row: Any) -> LibraryRoot:
@@ -296,28 +398,31 @@ class LibraryService:
         return validated_candidate
 
     def create(self, library: LibraryRoot) -> LibraryRoot:
-        libraries = self.load()
-        if any(item.id == library.id for item in libraries):
-            raise ValueError("library id already exists")
-        library = self._validate_collection(libraries, library)
-        libraries.append(library)
-        self.save(libraries)
-        return library
+        with self._configuration_lock(create=True):
+            libraries = self._load_unlocked()
+            if any(item.id == library.id for item in libraries):
+                raise ValueError("library id already exists")
+            library = self._validate_collection(libraries, library)
+            libraries.append(library)
+            self._save_unlocked(libraries)
+            return library
 
     def update(self, library_id: str, **changes: Any) -> LibraryRoot:
-        libraries = self.load()
-        current = next((item for item in libraries if item.id == library_id), None)
-        if current is None:
-            raise KeyError(library_id)
-        candidate = LibraryRoot(**{**current.to_dict(), **changes})
-        self._validate_collection(libraries, candidate, exclude_id=library_id)
-        libraries[libraries.index(current)] = candidate
-        self.save(libraries)
-        return candidate
+        with self._configuration_lock(create=True):
+            libraries = self._load_unlocked()
+            current = next((item for item in libraries if item.id == library_id), None)
+            if current is None:
+                raise KeyError(library_id)
+            candidate = LibraryRoot(**{**current.to_dict(), **changes})
+            self._validate_collection(libraries, candidate, exclude_id=library_id)
+            libraries[libraries.index(current)] = candidate
+            self._save_unlocked(libraries)
+            return candidate
 
     def delete(self, library_id: str) -> None:
-        libraries = self.load()
-        remaining = [item for item in libraries if item.id != library_id]
-        if len(remaining) == len(libraries):
-            raise KeyError(library_id)
-        self.save(remaining)
+        with self._configuration_lock(create=True):
+            libraries = self._load_unlocked()
+            remaining = [item for item in libraries if item.id != library_id]
+            if len(remaining) == len(libraries):
+                raise KeyError(library_id)
+            self._save_unlocked(remaining)
