@@ -38,3 +38,4 @@
 - ADB 位于 `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`，未加入 PATH。
 - 模拟器未发现 Expo Go 或 Remote ComfyUI 应用；需后续构建/安装调试包。
 - 本机 Java 17 可用，Android SDK 包含 android-35、android-36、android-37.0，Gradle 缓存已存在。
+- ComfyUI 后端代码中未发现通用的“前端工作流 JSON 转 API prompt”接口；目标模板需要在 ComfyUI 前端导出 API Format，或依据本机 `/object_info` 与连线手工构建并验证。
