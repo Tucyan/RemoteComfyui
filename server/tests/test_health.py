@@ -83,3 +83,63 @@ async def test_health_sanitizes_secret_bearing_probe_error():
         },
     }
     assert "super-secret" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_health_suppresses_secret_bearing_online_error_and_invalid_version():
+    async def health_probe():
+        return {
+            "online": True,
+            "version": "token=super-secret",
+            "error": "authorization=super-secret",
+        }
+
+    app = create_public_app(Settings(_env_file=None), health_probe=health_probe)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "gateway": {"status": "online"},
+        "comfyui": {"status": "online", "version": None, "error": None},
+    }
+    assert "super-secret" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_health_omits_version_when_comfyui_is_offline():
+    async def health_probe():
+        return {"online": False, "version": "0.30.0"}
+
+    app = create_public_app(Settings(_env_file=None), health_probe=health_probe)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "gateway": {"status": "online"},
+        "comfyui": {
+            "status": "offline",
+            "version": None,
+            "error": "ComfyUI health check failed",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_preserves_valid_comfyui_semver_version():
+    async def health_probe():
+        return {"online": True, "version": "0.30.0"}
+
+    app = create_public_app(Settings(_env_file=None), health_probe=health_probe)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "gateway": {"status": "online"},
+        "comfyui": {"status": "online", "version": "0.30.0", "error": None},
+    }

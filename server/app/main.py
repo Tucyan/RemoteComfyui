@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -13,6 +14,15 @@ from .settings import Settings
 
 HealthProbe = Callable[[], Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
 logger = logging.getLogger(__name__)
+_SAFE_COMFYUI_VERSION = re.compile(
+    r"(?:0|[1-9]\d{0,2})\.(?:0|[1-9]\d{0,2})\.(?:0|[1-9]\d{0,2})"
+)
+
+
+def _safe_comfyui_version(value: Any) -> str | None:
+    if not isinstance(value, str) or len(value) > 32:
+        return None
+    return value if _SAFE_COMFYUI_VERSION.fullmatch(value) else None
 
 
 async def _default_health_probe(settings: Settings) -> Mapping[str, Any]:
@@ -39,8 +49,8 @@ def _build_app(settings: Settings, health_probe: HealthProbe | None) -> FastAPI:
                 gateway=GatewayHealth(),
                 comfyui=ComfyUIHealth(
                     status="online" if online else "offline",
-                    version=result.get("version"),
-                    error=result.get("error") if online else "ComfyUI health check failed",
+                    version=_safe_comfyui_version(result.get("version")) if online else None,
+                    error=None if online else "ComfyUI health check failed",
                 ),
             )
         except Exception as exc:
