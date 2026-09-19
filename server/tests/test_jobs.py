@@ -66,6 +66,24 @@ def test_restart_reconciliation_uses_persisted_prompt_id(tmp_path):
     assert service.get_job(row["id"])["status"] == "succeeded"
 
 
+@pytest.mark.asyncio
+async def test_reconciliation_marks_comfyui_execution_error_as_failed(tmp_path):
+    class ErroredComfy(FakeComfy):
+        async def get_history(self, prompt_id):
+            return {prompt_id: {"status": {"completed": False, "status_str": "error", "messages": [
+                ["execution_error", {"node_type": "MiniMaxH3ReferenceToVideo", "exception_message": "unexpected keyword argument 'ref_image_1'"}],
+            ]}}}
+
+    service = JobService(Database(tmp_path / "jobs.db"), ErroredComfy(), tmp_path)
+    row = service.create_job("video", {"reference_images": ["one.png"], "prompt": "one"})
+    service.mark_submitted(row["id"], "prompt-error")
+    await service.reconcile()
+
+    result = service.get_job(row["id"])
+    assert result["status"] == "failed"
+    assert "unexpected keyword argument 'ref_image_1'" in result["error"]
+
+
 def test_artifact_ids_hide_storage_paths_and_support_ranges(tmp_path):
     db = Database(tmp_path / "jobs.db")
     service = JobService(db, FakeComfy(), tmp_path)

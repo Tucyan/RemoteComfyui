@@ -123,7 +123,7 @@ def build_minimax_prompt(
     for index, image_name in enumerate(refs, start=1):
         node_id = str(index)
         result[node_id]["inputs"]["image"] = image_name
-        video[f"ref_image_{index}"] = [node_id, 0]
+        video[f"ref_images.ref_image_{index - 1}"] = [node_id, 0]
     return result
 
 

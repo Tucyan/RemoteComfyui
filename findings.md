@@ -39,6 +39,12 @@
 - 模拟器未发现 Expo Go 或 Remote ComfyUI 应用；需后续构建/安装调试包。
 - 本机 Java 17 可用，Android SDK 包含 android-35、android-36、android-37.0，Gradle 缓存已存在。
 - ComfyUI 后端代码中未发现通用的“前端工作流 JSON 转 API prompt”接口；目标模板需要在 ComfyUI 前端导出 API Format，或依据本机 `/object_info` 与连线手工构建并验证。
+
+## MiniMax 运行报错调查
+
+- 当前本机 `MiniMaxH3ReferenceToVideo` 的 `ref_images` 输入类型为 `COMFY_AUTOGROW_V3`，前缀 `ref_image_`，索引 0–8；原工作流节点的连接名形如 `ref_images.ref_image_0`。
+- ComfyUI `_io.py` 以点号输入路径构造嵌套的 `ref_images` 字典传给 `execute()`；旧 Gateway 传顶层 `ref_image_1`，导致 `unexpected keyword argument`。
+- 对应 ComfyUI 历史的 `status_str=error`、`completed=false`；旧 Gateway 只识别成功而继续将该任务标为 running，新的错误分支读取 `execution_error` 后转为 failed。
 # 2026-09-19 功能优化发现
 
 - 现有图库页面点击图片会从受保护的图库 API 下载，再上传为参考图资产，随后回到生成页。代码路径存在；需要增加端到端测试，避免仅凭 UI 推断可用。

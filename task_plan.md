@@ -37,6 +37,14 @@
 - [x] 视频帧数 5–362、17n+5 前后端一致
 - [x] 全量自动化验证、刷新 Gateway 服务、重建 release APK（ADB 无在线设备，待手势实测）
 
+## 2026-09-19 MiniMax 实机报错修复
+
+- [x] 核对报错、原始工作流、本机节点定义和 ComfyUI 历史
+- [x] 修正 Autogrow 参考图输入名并补足 1/3/9 图回归测试
+- [x] 将 ComfyUI 执行错误对账为 failed，避免任务一直 running
+- [x] 后端回归、Gateway 刷新及旧失败任务状态校验
+- [ ] 用户重新提交一个低帧数视频任务进行 GPU 实际生成验证
+
 ## 已知约束
 
 - ComfyUI: `D:\AI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable`
@@ -55,3 +63,5 @@
 | 当前目录不是 Git 仓库 | 1 | 仅作为新项目目录使用，不依赖 Git 历史 |
 | 按目标名称未找到 JSON | 1 | 扩大到 ComfyUI 用户目录、数据库和 JSON 内容检索 |
 | 优化版 APK 安装时 ADB 没有在线设备 | 1 | 尝试启动本机 AVD；模拟器报告实例过多且未进入 ADB，保留 APK，等待用户启动模拟器后复测 |
+| MiniMax `ref_image_1` 参数异常 | 1 | 本机节点是 Autogrow，API 输入应为 `ref_images.ref_image_0` 起；模板构建器已更正 |
+| 修正后第一轮工作流测试误判 `ref_image_size` | 1 | 收紧旧键断言为 `ref_image_\d+` 后通过，生产映射未再改动 |

@@ -139,6 +139,16 @@ class JobService:
             self.mark_running(job_id)
             return
         status = record.get("status", {})
+        if status.get("status_str") == "error":
+            message = "ComfyUI execution failed"
+            for event in reversed(status.get("messages", [])):
+                if isinstance(event, (list, tuple)) and len(event) == 2 and event[0] == "execution_error" and isinstance(event[1], dict):
+                    detail = event[1].get("exception_message")
+                    if isinstance(detail, str) and detail.strip():
+                        message = f"ComfyUI execution failed: {detail.strip()}"
+                    break
+            self.db.execute("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=?", (message[:500], self.clock(), job_id))
+            return
         if not status.get("completed") and status.get("status_str") not in {"success", "succeeded"}:
             self.mark_running(job_id)
             return

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 
 import pytest
 
@@ -60,14 +61,15 @@ def test_minimax_accepts_one_to_nine_references_and_preserves_order(count: int):
     prompt = build_minimax_prompt(references, "镜头缓慢推进", width=1344, height=768, frames=124, seed=7)
 
     node = prompt["19"]
-    assert [node["inputs"][f"ref_image_{index}"][0] for index in range(1, count + 1)] == [str(index) for index in range(1, count + 1)]
+    assert [node["inputs"][f"ref_images.ref_image_{index}"][0] for index in range(count)] == [str(index + 1) for index in range(count)]
     assert [prompt[str(index)]["inputs"]["image"] for index in range(1, count + 1)] == references
     assert node["inputs"]["prompt"] == "镜头缓慢推进"
     assert node["inputs"]["width"] == 1344
     assert node["inputs"]["height"] == 768
     assert node["inputs"]["length"] == 124
     assert prompt["24"]["inputs"]["filename_prefix"] == "RemoteComfyUI/MiniMax_H3"
-    assert all(f"ref_image_{index}" not in node["inputs"] for index in range(count + 1, 10))
+    assert all(f"ref_images.ref_image_{index}" not in node["inputs"] for index in range(count, 9))
+    assert not any(re.fullmatch(r"ref_image_\d+", key) or key == "ref_images" for key in node["inputs"])
 
 
 @pytest.mark.parametrize("count", [0, 10])
