@@ -21,3 +21,5 @@
 - Task 2 已完成目录白名单/管理 API、配置验证与五份备份、loopback/Host/Origin/CSRF 防护；并修复并发丢更新和路径规范化。最终提交 `a1ecd4e`，本机后端测试 `34 passed`，规格与质量审查均通过。
 - Task 3 Windows 浏览器管理页已完成基础界面、目录增删改停用、深层目录选择与手动路径校验，修复 `/admin/` 资源路径与静态路由边界。复核通过，提交 `3437299` 与 `0dc5f7c`；前端测试 `11 passed`、构建成功、后端测试 `38 passed`。
 - Task 4 开始：收敛两个指定 ComfyUI 工作流为固定 API 模板和参数化生成接口。
+- Task 4 已提交 `9cfc621`：固定 Qwen/MiniMax 模板、参数校验与 ComfyUI 客户端；服务端测试 `69 passed`，尚未执行真实 GPU smoke 生成。
+- Task 5 开始：实现配对、设备令牌、任务持久化、公共手机 API 和产物访问。
