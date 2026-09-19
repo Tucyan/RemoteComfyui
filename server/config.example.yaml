@@ -1,6 +1,8 @@
+# ComfyUI must remain loopback-only. The Gateway is the only LAN-facing service.
 comfyui_url: http://127.0.0.1:8188
 public_host: 0.0.0.0
 public_port: 3000
+# The browser administration listener is always loopback-only.
 admin_host: 127.0.0.1
 admin_port: 3001
 data_dir: ./data

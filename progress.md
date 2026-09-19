@@ -27,3 +27,4 @@
 - Task 6 开始：实现 Expo React Native 安卓客户端。
 - Task 6 已提交 `552cb24`：Expo Android 客户端、配对、生成、任务、产物、图库和设置页面；RN 测试 `8 passed`、类型检查和 Android 导出通过，已安装到 `emulator-5584` 并确认配对页无空白/溢出。
 - Task 7 开始：补充 Windows 启动脚本、文档和端到端验收。
+- Task 7 已完成：新增 Gateway/管理页启动脚本、当前用户自动启动任务脚本、Windows 运行文档和启动脚本静态测试；管理页补齐一次性配对码、设备列表与撤销入口。后端 `81 passed`，管理页 `11 passed` 且构建成功，RN `8 passed`、类型检查和 Android 导出通过。真实 GPU 生图/生视频仍需在目标机器上手工联调。

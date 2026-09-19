@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
-import { ApiError, createLibrary, deleteLibrary, getSession, loadDirectories, loadDrives, loadHealth, loadLibraries, updateLibrary, validatePath } from "./api";
-import type { Health, Library } from "./api";
+import { ApiError, createLibrary, createPairingCode, deleteLibrary, getSession, loadDevices, loadDirectories, loadDrives, loadHealth, loadLibraries, revokeDevice, updateLibrary, validatePath } from "./api";
+import type { Device, Health, Library } from "./api";
 import "./styles.css";
 
 type DialogMode = "create" | "edit" | null;
@@ -27,6 +27,9 @@ export function AdminApp() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Library | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingLoading, setPairingLoading] = useState(false);
   const refreshLibraries = async () => {
     try {
       setError("");
@@ -40,8 +43,8 @@ export function AdminApp() {
     (async () => {
       try {
         await getSession();
-        const [nextHealth, nextLibraries] = await Promise.all([loadHealth(), loadLibraries()]);
-        if (active) { setHealth(nextHealth); setLibraries(nextLibraries); }
+        const [nextHealth, nextLibraries, nextDevices] = await Promise.all([loadHealth(), loadLibraries(), loadDevices().catch(() => [])]);
+        if (active) { setHealth(nextHealth); setLibraries(nextLibraries); setDevices(nextDevices ?? []); }
       } catch (cause) {
         if (active) setError(readableError("图片目录加载失败", cause));
       } finally {
@@ -78,6 +81,16 @@ export function AdminApp() {
     try { await deleteLibrary(deleteTarget.id); setDeleteTarget(null); await refreshLibraries(); }
     catch (cause) { setError(readableError("目录删除失败", cause)); }
   };
+  const generatePairingCode = async () => {
+    setPairingLoading(true);
+    try { setPairingCode(await createPairingCode()); }
+    catch (cause) { setError(readableError("配对码生成失败", cause)); }
+    finally { setPairingLoading(false); }
+  };
+  const removeDevice = async (device: Device) => {
+    try { await revokeDevice(device.id); setDevices(await loadDevices()); }
+    catch (cause) { setError(readableError("设备撤销失败", cause)); }
+  };
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">R</span><div><strong>Remote ComfyUI</strong><small>本机管理</small></div></div>
@@ -89,6 +102,7 @@ export function AdminApp() {
       {error && <div role="alert" className="alert"><span>{error}</span><button type="button" aria-label="关闭错误" onClick={() => setError("")}>×</button></div>}
       <section aria-labelledby="overview-heading"><div className="section-heading"><h2 id="overview-heading">状态概览</h2><span className="muted">实时检查</span></div><div className="status-grid"><div className="status-card"><span className="status-label">Gateway</span><strong className="status-value"><i className="dot online" />运行中</strong><small>本机服务正常</small></div><div className="status-card"><span className="status-label">ComfyUI</span><strong className="status-value" role="status"><i className={`dot ${comfyOnline ? "online" : "offline"}`} />{health ? (comfyOnline ? "ComfyUI 在线" : "ComfyUI 离线") : "检查中…"}</strong><small>{health?.comfyui?.version ? `版本 ${health.comfyui.version}` : "请检查 ComfyUI 服务"}</small></div><div className="status-card"><span className="status-label">图片目录</span><strong className="status-value">{libraries.length}<small className="inline-muted"> 个配置</small></strong><small>{libraries.filter((item) => item.enabled).length} 个已启用</small></div></div></section>
       <section id="libraries" aria-labelledby="libraries-heading" className="libraries-section"><div className="section-heading"><div><h2 id="libraries-heading">图片目录</h2><p className="section-description">目录配置只保存路径，不会移动或删除原始图片。</p></div><button className="secondary" type="button" onClick={openCreate}>新增目录</button></div>{loading ? <div className="empty-state">正在加载目录…</div> : libraries.length === 0 ? <div className="empty-state"><div className="empty-icon">▧</div><strong>还没有配置图片目录</strong><p>添加一个本机文件夹，让工作流可以使用其中的图片。</p><button className="primary" type="button" onClick={openCreate}>新增第一个目录</button></div> : <div className="table-wrap"><table><thead><tr><th>名称</th><th>路径</th><th>扫描方式</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead><tbody>{libraries.map((library) => <tr key={library.id}><td><strong>{library.name}</strong><small className="id-label">{library.id}</small></td><td className="path-cell" title={library.path}>{library.path}</td><td>{library.recursive ? "包含子目录" : "仅当前目录"}</td><td><span className={`badge ${library.enabled ? "enabled" : "disabled"}`}>{library.enabled ? "已启用" : "已停用"}</span></td><td><div className="actions"><button type="button" aria-label={`${library.enabled ? "停用" : "启用"} ${library.name}`} onClick={() => toggle(library)}>{library.enabled ? "停用" : "启用"}</button><button type="button" aria-label={`编辑 ${library.name}`} onClick={() => openEdit(library)}>编辑</button><button type="button" className="danger-link" aria-label={`删除 ${library.name}`} onClick={() => setDeleteTarget(library)}>删除</button></div></td></tr>)}</tbody></table></div>}</section>
+      <section id="pairing" aria-labelledby="pairing-heading" className="libraries-section"><div className="section-heading"><div><h2 id="pairing-heading">设备 / 配对</h2><p className="section-description">生成一次性配对码，让手机接入本机 Gateway。</p></div><button className="primary" type="button" onClick={generatePairingCode} disabled={pairingLoading}>{pairingLoading ? "生成中…" : "生成配对码"}</button></div>{pairingCode && <div className="pairing-code" role="status"><span>当前配对码</span><strong>{pairingCode}</strong><small>短时有效且只能使用一次</small></div>}<div className="table-wrap"><table><thead><tr><th>设备</th><th>创建时间</th><th>最近使用</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead><tbody>{devices.length === 0 ? <tr><td colSpan={5} className="muted">暂无已配对设备</td></tr> : devices.map((device) => <tr key={device.id}><td><strong>{device.name}</strong></td><td>{new Date(device.created_at * 1000).toLocaleString()}</td><td>{device.last_seen_at ? new Date(device.last_seen_at * 1000).toLocaleString() : "尚未使用"}</td><td><span className={`badge ${device.revoked ? "disabled" : "enabled"}`}>{device.revoked ? "已撤销" : "有效"}</span></td><td>{!device.revoked && <button type="button" className="danger-link" onClick={() => removeDevice(device)}>撤销</button>}</td></tr>)}</tbody></table></div></section>
     </main>
     {dialog && <LibraryDialog mode={dialog} form={form} setForm={setForm} saving={saving} formError={formError} onClose={() => setDialog(null)} onSubmit={submit} />}
     {deleteTarget && <div className="modal-backdrop"><section className="dialog compact" role="dialog" aria-modal="true" aria-labelledby="delete-heading"><h2 id="delete-heading">确认删除</h2><p>确定要删除“{deleteTarget.name}”吗？</p><p className="warning">仅删除目录配置，不会删除原图。</p><div className="dialog-actions"><button type="button" className="secondary" onClick={() => setDeleteTarget(null)}>取消</button><button type="button" className="danger" onClick={remove}>确认删除</button></div></section></div>}

@@ -11,6 +11,8 @@ export type Health = {
   comfyui?: { status?: string; version?: string | null; error?: string | null };
 };
 
+export type Device = { id: string; name: string; created_at: number; last_seen_at: number | null; revoked: boolean };
+
 let csrfToken: string | null = null;
 
 export class ApiError extends Error {
@@ -60,6 +62,18 @@ export function loadHealth() {
 
 export async function loadLibraries() {
   return (await request<{ libraries: Library[] }>("/admin/api/libraries")).libraries;
+}
+
+export async function createPairingCode() {
+  return (await request<{ code: string }>("/admin/api/pairing-code", { method: "POST" }, true)).code;
+}
+
+export async function loadDevices() {
+  return (await request<{ devices: Device[] }>("/admin/api/devices")).devices;
+}
+
+export function revokeDevice(id: string) {
+  return request<void>(`/admin/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }, true);
 }
 
 export async function loadDrives() {
