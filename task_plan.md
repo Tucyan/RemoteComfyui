@@ -13,8 +13,8 @@
 - [x] 编写可执行的分阶段实施方案
 - [x] 复核方案完整性并交付
 - [x] 补充 Windows 本地浏览器管理页方案
-- [~] Task 1：仓库与 Gateway 基础
-- [ ] Task 2：目录配置与 Windows 管理 API
+- [x] Task 1：仓库与 Gateway 基础
+- [~] Task 2：目录配置与 Windows 管理 API
 - [ ] Task 3：Windows 浏览器管理页
 - [ ] Task 4：固定工作流与 ComfyUI 客户端
 - [ ] Task 5：任务、配对、产物与手机 API

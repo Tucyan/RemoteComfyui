@@ -15,3 +15,6 @@
 - 已按最新要求将 Windows 管理端调整为纯浏览器页面，移除 pywebview、WebView2、托盘和 PyInstaller 依赖，并补充浏览器目录树及本地管理接口防护。
 - 已开始正式开发，建立 7 个任务的测试驱动实施计划。
 - 环境确认：Python 3.11、Node 24、npm 11 可用；ADB 位于 `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`，但未加入 PATH。
+- 中断恢复：当前分支 `feature/remote-comfyui-mvp`，Gateway 基础提交 `edd0624`；本机复跑 `9 passed`。
+- Task 1 规格审查通过；质量审查通过且无严重/重要问题。对未鉴权健康接口的异常回显安排测试驱动的小范围加固。
+- Task 1 加固经过三轮测试驱动修复与规格/质量复审，最终提交 `71963c8`；本机完整后端测试 `14 passed`，工作区仅规划日志未提交。
