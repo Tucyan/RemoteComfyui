@@ -414,7 +414,7 @@ class LibraryService:
             if current is None:
                 raise KeyError(library_id)
             candidate = LibraryRoot(**{**current.to_dict(), **changes})
-            self._validate_collection(libraries, candidate, exclude_id=library_id)
+            candidate = self._validate_collection(libraries, candidate, exclude_id=library_id)
             libraries[libraries.index(current)] = candidate
             self._save_unlocked(libraries)
             return candidate

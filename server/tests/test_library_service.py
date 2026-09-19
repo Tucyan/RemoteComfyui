@@ -79,6 +79,22 @@ def test_atomic_update_keeps_backups_and_never_deletes_source(tmp_path):
     assert (tmp_path / "config.yaml.bak.1").exists()
 
 
+def test_update_persists_canonicalized_path(tmp_path):
+    class CanonicalizingFS(FakeFS):
+        def validate_directory(self, path):
+            return super().validate_directory(path.rstrip("\\/"))
+
+    service = LibraryService(tmp_path, filesystem=CanonicalizingFS())
+    service.create(LibraryRoot(id="pictures", name="Pictures", path="C:\\Pictures"))
+
+    updated = service.update("pictures", path="C:\\Pictures\\")
+
+    assert updated.path == "C:\\Pictures"
+    payload = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert payload["libraries"][0]["path"] == "C:\\Pictures"
+    assert service.load()[0].path == "C:\\Pictures"
+
+
 def test_load_rejects_external_yaml_with_invalid_root(tmp_path):
     (tmp_path / "config.yaml").write_text(
         "libraries:\n  - id: pictures\n    name: Pictures\n    path: relative\\pictures\n",
