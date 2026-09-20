@@ -8,6 +8,7 @@ import {
   renumberPictureTokens,
   validateReferenceCount,
   validateVideoSettings,
+  normalizeVideoDimensions,
   calculateVideoDimensions,
   adjustVideoFrames,
   formatElapsed,
@@ -56,8 +57,7 @@ describe("mobile generation draft", () => {
     const size = calculateVideoDimensions("9:16", 1.5);
     expect(size.width % 32).toBe(0);
     expect(size.height % 32).toBe(0);
-    expect(size.width).toBeLessThanOrEqual(1920);
-    expect(size.height).toBeLessThanOrEqual(1088);
+    expect(size.width * size.height).toBeGreaterThan(1_400_000);
   });
 
   it("validates custom dimensions and advances frames by one workflow step", () => {
@@ -66,7 +66,7 @@ describe("mobile generation draft", () => {
     expect(validateVideoSettings(640, 960, 4).ok).toBe(false);
     expect(validateVideoSettings(640, 960, 6).ok).toBe(false);
     expect(validateVideoSettings(640, 960, 141)).toEqual({ ok: true, width: 640, height: 960 });
-    expect(validateVideoSettings(641, 960, 141).ok).toBe(false);
+    expect(validateVideoSettings(641, 959, 141)).toEqual({ ok: true, width: 640, height: 960, adjusted: true });
     expect(validateVideoSettings(640, 960, 140).ok).toBe(false);
     expect(adjustVideoFrames(124, 1)).toBe(141);
     expect(adjustVideoFrames(141, -1)).toBe(124);
@@ -74,6 +74,13 @@ describe("mobile generation draft", () => {
     expect(adjustVideoFrames(22, -1)).toBe(5);
     expect(adjustVideoFrames(5, -1)).toBe(5);
     expect(adjustVideoFrames(362, 1)).toBe(362);
+  });
+
+  it("snaps free-form dimensions to the nearest safe 32-aligned values", () => {
+    expect(normalizeVideoDimensions(641, 959)).toEqual({ width: 640, height: 960, adjusted: true });
+    expect(normalizeVideoDimensions(640, 960)).toEqual({ width: 640, height: 960, adjusted: false });
+    expect(normalizeVideoDimensions(1, 4096)).toEqual({ width: 32, height: 4096, adjusted: true });
+    expect(normalizeVideoDimensions(80, 112)).toEqual({ width: 96, height: 128, adjusted: true });
   });
 
   it("formats running elapsed time in seconds or minutes and seconds", () => {

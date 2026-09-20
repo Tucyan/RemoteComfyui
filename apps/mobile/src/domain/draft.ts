@@ -25,11 +25,16 @@ export function calculateVideoDimensions(ratio: string, megapixels: number): { w
   const area = megapixels * 1_000_000;
   const width = Math.sqrt(area * parts[0] / parts[1]);
   const height = Math.sqrt(area * parts[1] / parts[0]);
-  const scale = Math.min(1, 1920 / width, 1088 / height);
-  return {
-    width: Math.max(32, Math.round(width * scale / 32) * 32),
-    height: Math.max(32, Math.round(height * scale / 32) * 32),
-  };
+  return normalizeVideoDimensions(width, height);
+}
+
+export function normalizeVideoDimensions(width: number, height: number): { width: number; height: number; adjusted: boolean } {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error("宽度和高度必须是正数");
+  }
+  const normalizedWidth = Math.max(32, Math.round(width / 32) * 32);
+  const normalizedHeight = Math.max(32, Math.round(height / 32) * 32);
+  return { width: normalizedWidth, height: normalizedHeight, adjusted: normalizedWidth !== width || normalizedHeight !== height };
 }
 
 export function adjustVideoFrames(frames: number, direction: -1 | 1): number {
@@ -82,15 +87,17 @@ export function validateVideoSettings(
   widthOrPreset: number | string,
   heightOrFrames: number,
   frames?: number,
-): { ok: true; width: number; height: number } | { ok: false; error: string } {
+): { ok: true; width: number; height: number; adjusted?: true } | { ok: false; error: string } {
   const selected = typeof widthOrPreset === "string" ? VIDEO_PRESETS[widthOrPreset] : { width: widthOrPreset, height: heightOrFrames };
   if (!selected) return { ok: false, error: "不支持的分辨率预设" };
   const count = typeof widthOrPreset === "string" ? heightOrFrames : frames;
-  if (!Number.isInteger(selected.width) || !Number.isInteger(selected.height) || selected.width < 32 || selected.height < 32 || selected.width > 1920 || selected.height > 1088 || selected.width % 32 !== 0 || selected.height % 32 !== 0) {
-    return { ok: false, error: "宽高必须是 32 的倍数，且不超过 1920 × 1088" };
-  }
+  let dimensions;
+  try { dimensions = normalizeVideoDimensions(selected.width, selected.height); }
+  catch (cause) { return { ok: false, error: cause instanceof Error ? cause.message : "无效的视频尺寸" }; }
   if (!Number.isInteger(count) || count! < 5 || count! > 362 || (count! - 5) % 17 !== 0) {
     return { ok: false, error: "帧数须为 5～362 且满足 17n+5" };
   }
-  return { ok: true, width: selected.width, height: selected.height };
+  return dimensions.adjusted
+    ? { ok: true, width: dimensions.width, height: dimensions.height, adjusted: true }
+    : { ok: true, width: dimensions.width, height: dimensions.height };
 }

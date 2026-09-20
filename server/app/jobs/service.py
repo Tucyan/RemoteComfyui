@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import asyncio
+import hashlib
 import secrets
 import time
 from pathlib import Path
@@ -162,6 +163,17 @@ class JobService:
         self.db.execute("UPDATE jobs SET status='succeeded',updated_at=? WHERE id=?", (self.clock(), job_id))
 
     def add_artifact(self, job_id: str, mime_type: str, content: bytes, source_name: str) -> dict[str, Any]:
+        digest = hashlib.sha256(content).digest()
+        for row in self.db.fetchall(
+            "SELECT * FROM artifacts WHERE job_id=? AND mime_type=? AND size=?",
+            (job_id, mime_type, len(content)),
+        ):
+            existing_path = Path(row["storage_path"])
+            try:
+                if existing_path.is_file() and hashlib.sha256(existing_path.read_bytes()).digest() == digest:
+                    return self._artifact_response(row)
+            except OSError:
+                continue
         artifact_id = "artifact_" + secrets.token_urlsafe(12)
         suffix = Path(source_name).suffix.lower()[:10] or ".bin"
         path = self.artifact_dir / f"{artifact_id}{suffix}"

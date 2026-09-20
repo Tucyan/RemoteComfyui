@@ -279,7 +279,8 @@ def _video_dimensions(payload: VideoJobRequest) -> tuple[int, int]:
             return _VIDEO_PRESETS[payload.resolution_preset]
         except KeyError as exc:
             raise ValueError("unsupported video resolution preset") from exc
-    return payload.width, payload.height
+    from ..comfy.workflows import validate_video_dimensions
+    return validate_video_dimensions(payload.width, payload.height)
 
 
 def _resolve_library_image(jobs: JobService, libraries: LibraryService, image_id: str):

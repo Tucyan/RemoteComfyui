@@ -84,6 +84,28 @@ async def test_reconciliation_marks_comfyui_execution_error_as_failed(tmp_path):
     assert "unexpected keyword argument 'ref_image_1'" in result["error"]
 
 
+@pytest.mark.asyncio
+async def test_history_reprocessing_does_not_duplicate_same_artifact(tmp_path):
+    class VideoComfy(FakeComfy):
+        async def view(self, filename, **kwargs):
+            return b"video-bytes"
+
+    service = JobService(Database(tmp_path / "jobs.db"), VideoComfy(), tmp_path)
+    job = service.create_job("video", {"reference_images": ["one.png"], "prompt": "one"})
+    history = {
+        "prompt-1": {
+            "status": {"completed": True},
+            "outputs": {"24": {"images": [{"filename": "result.mp4", "subfolder": "", "type": "output"}]}},
+        }
+    }
+
+    await service._apply_history(job["id"], "prompt-1", history)
+    await service._apply_history(job["id"], "prompt-1", history)
+
+    artifacts = service.list_artifacts(job["id"])
+    assert len(artifacts) == 1
+
+
 def test_artifact_ids_hide_storage_paths_and_support_ranges(tmp_path):
     db = Database(tmp_path / "jobs.db")
     service = JobService(db, FakeComfy(), tmp_path)

@@ -78,13 +78,18 @@ def test_minimax_rejects_reference_counts_outside_one_to_nine(count: int):
         build_minimax_prompt([f"ref-{index}.png" for index in range(count)], "video")
 
 
-@pytest.mark.parametrize("width,height", [(640, 384), (1344, 768)])
-def test_video_dimensions_accept_multiples_of_32(width: int, height: int):
+@pytest.mark.parametrize("width,height", [(640, 384), (1344, 768), (4096, 2048)])
+def test_video_dimensions_accept_multiples_of_32_without_an_upper_limit(width: int, height: int):
     assert validate_video_dimensions(width, height) == (width, height)
 
 
-@pytest.mark.parametrize("width,height", [(641, 384), (640, 385), (0, 384), (4096, 32)])
-def test_video_dimensions_reject_unsafe_values(width: int, height: int):
+@pytest.mark.parametrize("width,height,expected", [(641, 959, (640, 960)), (1, 4096, (32, 4096)), (80, 112, (96, 128))])
+def test_video_dimensions_snap_to_the_nearest_32_aligned_values(width: int, height: int, expected: tuple[int, int]):
+    assert validate_video_dimensions(width, height) == expected
+
+
+@pytest.mark.parametrize("width,height", [(0, 384), (-1, 384)])
+def test_video_dimensions_reject_non_positive_values(width: int, height: int):
     with pytest.raises(ValueError):
         validate_video_dimensions(width, height)
 

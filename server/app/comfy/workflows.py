@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import secrets
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -14,8 +15,6 @@ _QWEN_TEMPLATE_BY_COUNT = {
     3: "image_qwen_3.json",
 }
 _MINIMAX_TEMPLATE = "video_minimax_h3.json"
-_MAX_VIDEO_WIDTH = 1920
-_MAX_VIDEO_HEIGHT = 1088
 _MIN_VIDEO_FRAMES = 5
 _MAX_VIDEO_FRAMES = 362
 _REFERENCE_LIMITS = {"qwen": (1, 3), "minimax": (1, 9)}
@@ -80,15 +79,11 @@ def validate_video_dimensions(width: int, height: int) -> tuple[int, int]:
         or isinstance(height, bool)
         or not isinstance(width, int)
         or not isinstance(height, int)
-        or width < 32
-        or height < 32
-        or width > _MAX_VIDEO_WIDTH
-        or height > _MAX_VIDEO_HEIGHT
-        or width % 32
-        or height % 32
+        or width <= 0
+        or height <= 0
     ):
-        raise ValueError("video width and height must be 32-aligned and within the safe range")
-    return width, height
+        raise ValueError("video width and height must be positive integers")
+    return max(32, math.floor(width / 32 + 0.5) * 32), max(32, math.floor(height / 32 + 0.5) * 32)
 
 
 def validate_video_frames(frames: int) -> int:
