@@ -15,9 +15,12 @@ _QWEN_TEMPLATE_BY_COUNT = {
     3: "image_qwen_3.json",
 }
 _MINIMAX_TEMPLATE = "video_minimax_h3.json"
+_QWEN_21_EDIT_TEMPLATE = "image_qwen_21_edit_8gb.json"
+_QWEN_21_T2I_TEMPLATE = "image_qwen_21_t2i_8gb.json"
 _MIN_VIDEO_FRAMES = 5
 _MAX_VIDEO_FRAMES = 362
-_REFERENCE_LIMITS = {"qwen": (1, 3), "minimax": (1, 9)}
+_REFERENCE_LIMITS = {"qwen": (1, 3), "qwen_21_edit": (1, 10), "minimax": (1, 9)}
+_QWEN_21_MAX_DIMENSION = 2048
 
 
 def _load_template(filename: str) -> dict[str, dict[str, Any]]:
@@ -73,6 +76,75 @@ def build_qwen_prompt(reference_images: Sequence[str], prompt: str, *, seed: int
     return result
 
 
+def _validate_qwen_21_dimensions(width: int, height: int, *, multiple: int) -> tuple[int, int]:
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or width <= 0
+        or height <= 0
+    ):
+        raise ValueError("Qwen Image 2.1 width and height must be positive integers")
+    if width > _QWEN_21_MAX_DIMENSION or height > _QWEN_21_MAX_DIMENSION:
+        raise ValueError(f"Qwen Image 2.1 dimensions must be at most {_QWEN_21_MAX_DIMENSION} pixels")
+    return max(multiple, math.floor(width / multiple + 0.5) * multiple), max(
+        multiple, math.floor(height / multiple + 0.5) * multiple
+    )
+
+
+def _qwen_21_encoder_resolution(width: int, height: int) -> int:
+    """Return the encoder's square-root pixel-area setting for a custom edit size.
+
+    TextEncodeQwenImage21 treats ``resolution`` as the edge length of a square
+    pixel budget and derives the other edge from each reference image's aspect
+    ratio.  Using the target area here keeps reference conditioning close to
+    the custom EmptyLatentImage size while preserving the source ratio.
+    """
+    return max(32, min(4096, math.floor(math.sqrt(width * height) / 32 + 0.5) * 32))
+
+
+def build_qwen_21_edit_prompt(
+    reference_images: Sequence[str],
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    refs = _references(reference_images, "qwen_21_edit")
+    width, height = _validate_qwen_21_dimensions(width, height, multiple=32)
+    result = _load_template(_QWEN_21_EDIT_TEMPLATE)
+    encoder = result["474"]["inputs"]
+    encoder["prompt"] = _prompt_text(prompt)
+    encoder["resolution"] = _qwen_21_encoder_resolution(width, height)
+    result["456"]["inputs"].update({"width": width, "height": height})
+    result["468"]["inputs"]["switch"] = True
+    result["458"]["inputs"]["seed"] = _seed(seed)
+
+    for index, image_name in enumerate(refs, start=1):
+        node_id = str(index)
+        result[node_id]["inputs"]["image"] = image_name
+        encoder[f"images.image_{index}"] = [node_id, 0]
+    for index in range(len(refs) + 1, 11):
+        result.pop(str(index), None)
+        encoder.pop(f"images.image_{index}", None)
+    return result
+
+
+def build_qwen_21_t2i_prompt(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    width, height = _validate_qwen_21_dimensions(width, height, multiple=8)
+    result = _load_template(_QWEN_21_T2I_TEMPLATE)
+    result["452"]["inputs"]["prompt"] = _prompt_text(prompt)
+    result["456"]["inputs"].update({"width": width, "height": height})
+    result["458"]["inputs"]["seed"] = _seed(seed)
+    return result
+
+
 def validate_video_dimensions(width: int, height: int) -> tuple[int, int]:
     if (
         isinstance(width, bool)
@@ -125,6 +197,8 @@ def build_minimax_prompt(
 __all__ = [
     "build_minimax_prompt",
     "build_qwen_prompt",
+    "build_qwen_21_edit_prompt",
+    "build_qwen_21_t2i_prompt",
     "validate_video_dimensions",
     "validate_video_frames",
 ]

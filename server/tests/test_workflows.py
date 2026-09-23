@@ -8,6 +8,8 @@ import pytest
 from app.comfy.workflows import (
     build_minimax_prompt,
     build_qwen_prompt,
+    build_qwen_21_edit_prompt,
+    build_qwen_21_t2i_prompt,
     validate_video_dimensions,
     validate_video_frames,
 )
@@ -127,3 +129,99 @@ def test_template_result_mutation_does_not_leak_between_builds():
     second = build_minimax_prompt(["second.png"], "two")
     assert snapshot["19"]["inputs"]["prompt"] == "one"
     assert second["19"]["inputs"]["prompt"] == "two"
+
+
+def test_qwen_21_edit_uses_fixed_graph_models_output_and_dimensions():
+    prompt = build_qwen_21_edit_prompt(["first.png"], "replace the sky", 1024, 768, seed=42)
+
+    assert prompt["451"]["class_type"] == "UNETLoader"
+    assert prompt["451"]["inputs"]["unet_name"] == "qwen_image_2.1_int8_convrot.safetensors"
+    assert prompt["453"]["inputs"]["clip_name"] == "qwen3vl_8b_int8_convrot.safetensors"
+    assert prompt["454"]["inputs"]["vae_name"] == "qwen_image_2.1_vae_bf16.safetensors"
+    assert prompt["461"]["class_type"] == "SaveImageAdvanced"
+    assert prompt["474"]["inputs"]["prompt"] == "replace the sky"
+    assert prompt["474"]["inputs"]["resolution"] == 896
+    assert prompt["468"]["inputs"]["switch"] is True
+    assert prompt["456"]["inputs"] == {"width": 1024, "height": 768, "batch_size": 1}
+    assert prompt["468"]["inputs"]["on_true"] == ["456", 0]
+    assert prompt["458"]["inputs"]["latent_image"] == ["468", 0]
+    assert prompt["458"]["inputs"]["seed"] == 42
+    assert prompt["461"]["inputs"]["images"] == ["457", 0]
+
+
+@pytest.mark.parametrize("count", [1, 10])
+def test_qwen_21_edit_preserves_reference_order_and_slots(count: int):
+    refs = [f"upload-{index}.png" for index in range(count)]
+    prompt = build_qwen_21_edit_prompt(refs, "edit", 640, 640, seed=7)
+
+    assert [prompt[str(index)]["inputs"]["image"] for index in range(1, count + 1)] == refs
+    encoder = prompt["474"]["inputs"]
+    assert [encoder[f"images.image_{index}"][0] for index in range(1, count + 1)] == [str(index) for index in range(1, count + 1)]
+    assert all(f"images.image_{index}" not in encoder for index in range(count + 1, 11))
+
+
+@pytest.mark.parametrize("count", [0, 11])
+def test_qwen_21_edit_rejects_reference_counts_outside_one_to_ten(count: int):
+    with pytest.raises(ValueError, match="1.*10"):
+        build_qwen_21_edit_prompt([f"ref-{index}.png" for index in range(count)], "edit", 640, 640)
+
+
+@pytest.mark.parametrize("width,height", [(0, 640), (-32, 640), (2080, 640)])
+def test_qwen_21_edit_rejects_invalid_dimensions(width: int, height: int):
+    with pytest.raises(ValueError):
+        build_qwen_21_edit_prompt(["ref.png"], "edit", width, height)
+
+
+def test_qwen_21_t2i_uses_fixed_graph_prompt_seed_and_dimensions():
+    prompt = build_qwen_21_t2i_prompt("a red fox", 1024, 768, seed=99)
+
+    assert prompt["451"]["inputs"]["unet_name"] == "qwen_image_2.1_int8_convrot.safetensors"
+    assert prompt["453"]["inputs"]["clip_name"] == "qwen3vl_8b_int8_convrot.safetensors"
+    assert prompt["454"]["inputs"]["vae_name"] == "qwen_image_2.1_vae_bf16.safetensors"
+    assert prompt["452"]["inputs"]["prompt"] == "a red fox"
+    assert prompt["452"]["inputs"]["resolution"] == 1024
+    assert prompt["456"]["inputs"] == {"width": 1024, "height": 768, "batch_size": 1}
+    assert prompt["458"]["inputs"]["seed"] == 99
+    assert prompt["461"]["class_type"] == "SaveImageAdvanced"
+
+
+def test_qwen_21_t2i_rejects_reference_arguments_and_invalid_dimensions():
+    with pytest.raises(ValueError):
+        build_qwen_21_t2i_prompt("text", 0, 768)
+    with pytest.raises(ValueError):
+        build_qwen_21_t2i_prompt("text", 2080, 768)
+
+
+def test_qwen_21_templates_are_deep_copied_and_reject_path_like_references():
+    first = build_qwen_21_edit_prompt(["first.png"], "original", 640, 640)
+    first["474"]["inputs"]["prompt"] = "mutated"
+    second = build_qwen_21_edit_prompt(["second.png"], "original", 640, 640)
+    assert second["474"]["inputs"]["prompt"] == "original"
+
+    for reference in ["../secret.png", "/absolute.png", "C:/secret.png", "C:\\secret.png"]:
+        with pytest.raises(ValueError, match="reference"):
+            build_qwen_21_edit_prompt([reference], "edit", 640, 640)
+
+
+@pytest.mark.parametrize("bad_prompt", [None, "", "   ", "x" * 10001, 123])
+def test_qwen_21_edit_rejects_invalid_prompts(bad_prompt: object):
+    with pytest.raises(ValueError, match="prompt"):
+        build_qwen_21_edit_prompt(["ref.png"], bad_prompt, 640, 640)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad_seed", [True, -1, 2**64, 1.5, "42"])
+def test_qwen_21_edit_rejects_invalid_seeds(bad_seed: object):
+    with pytest.raises(ValueError, match="seed"):
+        build_qwen_21_edit_prompt(["ref.png"], "edit", 640, 640, seed=bad_seed)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad_prompt", [None, "", "   ", "x" * 10001, 123])
+def test_qwen_21_t2i_rejects_invalid_prompts(bad_prompt: object):
+    with pytest.raises(ValueError, match="prompt"):
+        build_qwen_21_t2i_prompt(bad_prompt, 640, 640)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad_seed", [True, -1, 2**64, 1.5, "42"])
+def test_qwen_21_t2i_rejects_invalid_seeds(bad_seed: object):
+    with pytest.raises(ValueError, match="seed"):
+        build_qwen_21_t2i_prompt("text", 640, 640, seed=bad_seed)  # type: ignore[arg-type]

@@ -171,3 +171,145 @@ async def test_worker_uses_comfyui_renamed_reference_filenames(tmp_path):
     names = [inputs["image"] for node in comfy.queued[0].values() for inputs in [node.get("inputs", {})] if isinstance(inputs.get("image"), str)]
     assert "renamed-1.png" in names
     assert "renamed-2.png" in names
+
+
+@pytest.mark.asyncio
+async def test_worker_defaults_missing_image_workflow_to_legacy_qwen_2511(tmp_path):
+    comfy = FakeComfy()
+    service = JobService(Database(tmp_path / "jobs.db"), comfy, tmp_path)
+    service.create_job("image", {"reference_images": ["legacy.png"], "prompt": "legacy edit", "seed": 7})
+
+    await service.run_once()
+
+    prompt = comfy.queued[0]
+    assert prompt["11"]["inputs"]["unet_name"] == "qwen_image_edit_2511_int8_convrot.safetensors"
+    assert prompt["15"]["inputs"]["prompt"] == "legacy edit"
+    assert prompt["20"]["inputs"]["seed"] == 7
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatches_video_with_ordered_uploads_and_settings(tmp_path):
+    comfy = RenamingComfy()
+    service = JobService(Database(tmp_path / "jobs.db"), comfy, tmp_path)
+    first = tmp_path / "video-first.png"
+    second = tmp_path / "video-second.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    service.create_job(
+        "video",
+        {
+            "reference_images": ["video-first.png", "video-second.png"],
+            "reference_files": [
+                {"asset_id": "first", "filename": "video-first.png", "path": str(first)},
+                {"asset_id": "second", "filename": "video-second.png", "path": str(second)},
+            ],
+            "prompt": "camera push in",
+            "width": 640,
+            "height": 480,
+            "frames": 124,
+            "seed": 123,
+        },
+    )
+
+    await service.run_once()
+
+    prompt = comfy.queued[0]
+    video = prompt["19"]["inputs"]
+    assert comfy.uploaded == ["video-first.png", "video-second.png"]
+    assert [prompt[str(index)]["inputs"]["image"] for index in (1, 2)] == ["renamed-1.png", "renamed-2.png"]
+    assert video["prompt"] == "camera push in"
+    assert video["width"] == 640
+    assert video["height"] == 480
+    assert video["length"] == 124
+    assert video["ref_images.ref_image_0"] == ["1", 0]
+    assert video["ref_images.ref_image_1"] == ["2", 0]
+    assert prompt["16"]["inputs"]["noise_seed"] == 123
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatches_qwen_21_edit_with_ordered_uploads_and_dimensions(tmp_path):
+    comfy = RenamingComfy()
+    service = JobService(Database(tmp_path / "jobs.db"), comfy, tmp_path)
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    service.create_job(
+        "image",
+        {
+            "workflow": "qwen_image_2_1_8gb_edit",
+            "reference_images": ["first.png", "second.png"],
+            "reference_files": [
+                {"asset_id": "first", "filename": "first.png", "path": str(first)},
+                {"asset_id": "second", "filename": "second.png", "path": str(second)},
+            ],
+            "prompt": "replace the sky",
+            "width": 1024,
+            "height": 768,
+            "seed": 42,
+        },
+    )
+
+    await service.run_once()
+
+    prompt = comfy.queued[0]
+    assert comfy.uploaded == ["first.png", "second.png"]
+    assert [prompt[str(index)]["inputs"]["image"] for index in (1, 2)] == ["renamed-1.png", "renamed-2.png"]
+    assert prompt["474"]["inputs"]["prompt"] == "replace the sky"
+    assert prompt["456"]["inputs"]["width"] == 1024
+    assert prompt["456"]["inputs"]["height"] == 768
+    assert prompt["458"]["inputs"]["seed"] == 42
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatches_qwen_21_t2i_without_uploading_or_passing_references(tmp_path):
+    comfy = RenamingComfy()
+    service = JobService(Database(tmp_path / "jobs.db"), comfy, tmp_path)
+    reference = tmp_path / "should-not-upload.png"
+    reference.write_bytes(b"reference")
+
+    service.create_job(
+        "image",
+        {
+            "workflow": "qwen_image_2_1_8gb_t2i",
+            "reference_images": ["should-not-upload.png"],
+            "reference_files": [{"asset_id": "ignored", "filename": "should-not-upload.png", "path": str(reference)}],
+            "prompt": "a red fox",
+            "width": 1024,
+            "height": 768,
+            "seed": 99,
+        },
+    )
+
+    await service.run_once()
+
+    prompt = comfy.queued[0]
+    assert comfy.uploaded == []
+    assert "1" not in prompt
+    assert not any(node.get("class_type") == "LoadImage" for node in prompt.values())
+    assert not any(
+        key.startswith("images.")
+        for node in prompt.values()
+        for key in node.get("inputs", {})
+    )
+    assert prompt["452"]["inputs"]["prompt"] == "a red fox"
+    assert prompt["456"]["inputs"]["width"] == 1024
+    assert prompt["456"]["inputs"]["height"] == 768
+    assert prompt["458"]["inputs"]["seed"] == 99
+
+
+@pytest.mark.asyncio
+async def test_worker_fails_unknown_image_workflow_without_queueing(tmp_path):
+    comfy = FakeComfy()
+    service = JobService(Database(tmp_path / "jobs.db"), comfy, tmp_path)
+    job = service.create_job(
+        "image",
+        {"workflow": "unknown", "reference_images": ["reference.png"], "prompt": "should fail"},
+    )
+
+    result = await service.run_once()
+
+    assert result["status"] == "failed"
+    assert "unsupported image workflow" in result["error"]
+    assert comfy.queued == []

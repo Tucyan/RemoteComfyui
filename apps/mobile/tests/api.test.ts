@@ -26,13 +26,13 @@ describe("mobile API client", () => {
     );
     const api = new RemoteApi("http://gateway:3000", "rc_test");
 
-    await api.createImageJob("prompt", ["asset_1"]);
+    await api.createImageJob({ prompt: "prompt", workflow: "qwen_edit_2511", referenceAssetIds: ["asset_1"] });
     await api.createVideoJob("video", ["asset_1", "asset_2"], 352, 608, 175);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "http://gateway:3000/api/v1/jobs/image",
-      expect.objectContaining({ body: JSON.stringify({ prompt: "prompt", referenceAssetIds: ["asset_1"] }) }),
+      expect.objectContaining({ body: JSON.stringify({ prompt: "prompt", workflow: "qwen_edit_2511", referenceAssetIds: ["asset_1"] }) }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -41,9 +41,20 @@ describe("mobile API client", () => {
     );
   });
 
+  it("sends workflow-specific image settings and omits unrelated fields", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ id: "job_1" }), { status: 202 }));
+    const api = new RemoteApi("http://gateway:3000", "rc_test");
+    await api.createImageJob({ prompt: "edit", workflow: "qwen_image_2_1_8gb_edit", referenceAssetIds: ["target", "ref"], editSizeMode: "scale", scaleFactor: 1.2 });
+    await api.createImageJob({ prompt: "edit dimensions", workflow: "qwen_image_2_1_8gb_edit", referenceAssetIds: ["target"], editSizeMode: "dimensions", width: 1024, height: 768 });
+    await api.createImageJob({ prompt: "draw", workflow: "qwen_image_2_1_8gb_t2i", referenceAssetIds: [], width: 1024, height: 1024 });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://gateway:3000/api/v1/jobs/image", expect.objectContaining({ body: JSON.stringify({ prompt: "edit", workflow: "qwen_image_2_1_8gb_edit", referenceAssetIds: ["target", "ref"], editSizeMode: "scale", scaleFactor: 1.2 }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://gateway:3000/api/v1/jobs/image", expect.objectContaining({ body: JSON.stringify({ prompt: "edit dimensions", workflow: "qwen_image_2_1_8gb_edit", referenceAssetIds: ["target"], editSizeMode: "dimensions", width: 1024, height: 768 }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://gateway:3000/api/v1/jobs/image", expect.objectContaining({ body: JSON.stringify({ prompt: "draw", workflow: "qwen_image_2_1_8gb_t2i", referenceAssetIds: [], width: 1024, height: 1024 }) }));
+  });
+
   it("imports a protected library image through the upload endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "asset_2", filename: "desk.png", mime_type: "image/png", size: 5 }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "asset_2", filename: "desk.png", mime_type: "image/png", size: 5, width: 1200, height: 800 }), { status: 200 }));
     const api = new RemoteApi("http://gateway:3000", "rc_test");
 
     await expect(api.importLibraryImage({
@@ -55,7 +66,7 @@ describe("mobile API client", () => {
       mtime: 1,
       thumbnail_url: "/thumb",
       content_url: "/content",
-    })).resolves.toMatchObject({ id: "asset_2" });
+    })).resolves.toMatchObject({ id: "asset_2", width: 1200, height: 800 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith("http://gateway:3000/api/v1/library-images/libimg_1/import", expect.objectContaining({ method: "POST", headers: { Authorization: "Bearer rc_test" } }));
   });

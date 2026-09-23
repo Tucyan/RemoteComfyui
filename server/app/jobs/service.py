@@ -8,7 +8,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..comfy.workflows import build_minimax_prompt, build_qwen_prompt
+from ..comfy.workflows import (
+    build_minimax_prompt,
+    build_qwen_21_edit_prompt,
+    build_qwen_21_t2i_prompt,
+    build_qwen_prompt,
+)
 from ..db import Database
 from .models import JOB_STATES
 
@@ -106,14 +111,47 @@ class JobService:
         job_id = row["id"]
         payload = self.db.json_loads(row["payload_json"])
         try:
-            references = list(payload.get("reference_images", []))
-            for index, upload in enumerate(payload.get("reference_files", [])):
-                result = await self.comfy.upload_image(upload["filename"], Path(upload["path"]).read_bytes(), content_type=upload.get("mime_type", "application/octet-stream"))
-                if isinstance(result, dict) and isinstance(result.get("name"), str) and result["name"]:
-                    references[index] = result["name"]
             if row["kind"] == "image":
-                prompt = build_qwen_prompt(references, payload["prompt"], seed=payload.get("seed"))
+                workflow = payload.get("workflow", "qwen_edit_2511")
+                if workflow not in (
+                    "qwen_edit_2511",
+                    "qwen_image_2_1_8gb_edit",
+                    "qwen_image_2_1_8gb_t2i",
+                ):
+                    raise ValueError(f"unsupported image workflow: {workflow}")
+                if workflow == "qwen_image_2_1_8gb_t2i":
+                    prompt = build_qwen_21_t2i_prompt(
+                        payload["prompt"],
+                        payload["width"],
+                        payload["height"],
+                        seed=payload.get("seed"),
+                    )
+                else:
+                    references = list(payload.get("reference_images", []))
+                    for index, upload in enumerate(payload.get("reference_files", [])):
+                        result = await self.comfy.upload_image(upload["filename"], Path(upload["path"]).read_bytes(), content_type=upload.get("mime_type", "application/octet-stream"))
+                        if index >= len(references):
+                            references.append(upload["filename"])
+                        if isinstance(result, dict) and isinstance(result.get("name"), str) and result["name"]:
+                            references[index] = result["name"]
+                    if workflow == "qwen_image_2_1_8gb_edit":
+                        prompt = build_qwen_21_edit_prompt(
+                            references,
+                            payload["prompt"],
+                            payload["width"],
+                            payload["height"],
+                            seed=payload.get("seed"),
+                        )
+                    else:
+                        prompt = build_qwen_prompt(references, payload["prompt"], seed=payload.get("seed"))
             else:
+                references = list(payload.get("reference_images", []))
+                for index, upload in enumerate(payload.get("reference_files", [])):
+                    result = await self.comfy.upload_image(upload["filename"], Path(upload["path"]).read_bytes(), content_type=upload.get("mime_type", "application/octet-stream"))
+                    if index >= len(references):
+                        references.append(upload["filename"])
+                    if isinstance(result, dict) and isinstance(result.get("name"), str) and result["name"]:
+                        references[index] = result["name"]
                 prompt = build_minimax_prompt(references, payload["prompt"], width=payload.get("width", 1344), height=payload.get("height", 768), frames=payload.get("frames", 124), seed=payload.get("seed"))
             queued = await self.comfy.queue_prompt(prompt, client_id="remote-comfyui")
             prompt_id = queued.get("prompt_id")

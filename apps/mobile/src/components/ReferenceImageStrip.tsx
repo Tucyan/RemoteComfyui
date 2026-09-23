@@ -1,6 +1,6 @@
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
-export type ReferenceItem = { id: string; name: string; uri?: string };
+export type ReferenceItem = { id: string; name: string; uri?: string; width?: number; height?: number };
 
 type Props = {
   items: ReferenceItem[];

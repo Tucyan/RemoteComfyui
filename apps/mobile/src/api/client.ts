@@ -1,6 +1,9 @@
+import type { WorkflowId } from "../domain/draft";
+
 export type GenerationJob = {
   id: string;
   kind: "image" | "video";
+  workflow?: WorkflowId;
   status: string;
   prompt_id?: string | null;
   error?: string | null;
@@ -31,6 +34,17 @@ export type LibraryImage = {
 };
 
 export type UploadAsset = { uri: string; name: string; type: string };
+export type UploadedImage = { id: string; filename: string; mime_type: string; size: number; width: number; height: number };
+export type ImageWorkflowId = Extract<WorkflowId, "qwen_edit_2511" | "qwen_image_2_1_8gb_edit" | "qwen_image_2_1_8gb_t2i">;
+export type ImageJobInput = {
+  prompt: string;
+  workflow: ImageWorkflowId;
+  referenceAssetIds: string[];
+  editSizeMode?: "scale" | "dimensions";
+  scaleFactor?: number;
+  width?: number;
+  height?: number;
+};
 
 type JsonValue = unknown;
 
@@ -49,20 +63,20 @@ export class RemoteApi {
     return this.request("/api/v1/health", { authenticated: false });
   }
 
-  async uploadImages(files: UploadAsset[]): Promise<{ assets: Array<{ id: string; filename: string; mime_type: string; size: number }> }> {
+  async uploadImages(files: UploadAsset[]): Promise<{ assets: UploadedImage[] }> {
     const form = new FormData();
     files.forEach((file) => form.append("files", file as unknown as Blob));
     return this.request("/api/v1/uploads/images", { method: "POST", body: form });
   }
 
-  async importLibraryImage(image: LibraryImage): Promise<{ id: string; filename: string; mime_type: string; size: number }> {
+  async importLibraryImage(image: LibraryImage): Promise<UploadedImage> {
     return this.request(`/api/v1/library-images/${encodeURIComponent(image.id)}/import`, { method: "POST" });
   }
 
-  async createImageJob(prompt: string, referenceAssetIds: string[]): Promise<GenerationJob> {
+  async createImageJob(input: ImageJobInput): Promise<GenerationJob> {
     return this.request("/api/v1/jobs/image", {
       method: "POST",
-      body: { prompt, referenceAssetIds },
+      body: input,
     });
   }
 

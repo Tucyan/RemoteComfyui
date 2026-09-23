@@ -14,16 +14,27 @@ import {
   formatElapsed,
   VIDEO_RATIOS,
   updateModePrompt,
+  WORKFLOW_DESCRIPTORS,
+  calculateEditDimensions,
+  lockEditDimensions,
+  calculateImageDimensions,
+  updateWorkflowPrompt,
+  initialEditScale,
+  updateWorkflowValue,
 } from "../src/domain/draft";
 
 describe("mobile generation draft", () => {
   it("accepts Qwen references from one to three and rejects other counts", () => {
-    expect(validateReferenceCount("image", 1)).toBe(true);
-    expect(validateReferenceCount("image", 3)).toBe(true);
-    expect(validateReferenceCount("image", 0)).toBe(false);
-    expect(validateReferenceCount("image", 4)).toBe(false);
-    expect(validateReferenceCount("video", 9)).toBe(true);
-    expect(validateReferenceCount("video", 10)).toBe(false);
+    expect(validateReferenceCount("qwen_edit_2511", 1)).toBe(true);
+    expect(validateReferenceCount("qwen_edit_2511", 3)).toBe(true);
+    expect(validateReferenceCount("qwen_edit_2511", 0)).toBe(false);
+    expect(validateReferenceCount("qwen_edit_2511", 4)).toBe(false);
+    expect(validateReferenceCount("qwen_image_2_1_8gb_edit", 10)).toBe(true);
+    expect(validateReferenceCount("qwen_image_2_1_8gb_edit", 11)).toBe(false);
+    expect(validateReferenceCount("qwen_image_2_1_8gb_t2i", 0)).toBe(true);
+    expect(validateReferenceCount("qwen_image_2_1_8gb_t2i", 1)).toBe(false);
+    expect(validateReferenceCount("minimax_h3", 9)).toBe(true);
+    expect(validateReferenceCount("minimax_h3", 10)).toBe(false);
   });
 
   it("keeps valid picture tokens and clamps them after references are removed", () => {
@@ -92,5 +103,66 @@ describe("mobile generation draft", () => {
     const first = updateModePrompt({ image: "", video: "" }, "image", "edit this");
     const second = updateModePrompt(first, "video", "animate this");
     expect(second).toEqual({ image: "edit this", video: "animate this" });
+  });
+
+  it("describes four workflows with the correct kind and reference limits", () => {
+    expect(Object.keys(WORKFLOW_DESCRIPTORS)).toEqual([
+      "qwen_edit_2511", "qwen_image_2_1_8gb_edit", "qwen_image_2_1_8gb_t2i", "minimax_h3",
+    ]);
+    expect(WORKFLOW_DESCRIPTORS.qwen_image_2_1_8gb_t2i).toMatchObject({ kind: "image", minReferences: 0, maxReferences: 0 });
+    expect(WORKFLOW_DESCRIPTORS.minimax_h3).toMatchObject({ kind: "video", minReferences: 1, maxReferences: 9 });
+  });
+
+  it("preserves independent prompts when switching among workflows", () => {
+    const blank = { qwen_edit_2511: "", qwen_image_2_1_8gb_edit: "", qwen_image_2_1_8gb_t2i: "", minimax_h3: "" };
+    const edit = updateWorkflowPrompt(blank, "qwen_image_2_1_8gb_edit", "edit prompt");
+    const t2i = updateWorkflowPrompt(edit, "qwen_image_2_1_8gb_t2i", "draw prompt");
+    const video = updateWorkflowPrompt(t2i, "minimax_h3", "video prompt");
+    expect(video).toEqual({ qwen_edit_2511: "", qwen_image_2_1_8gb_edit: "edit prompt", qwen_image_2_1_8gb_t2i: "draw prompt", minimax_h3: "video prompt" });
+  });
+
+  it("preserves independent reference drafts while switching workflows", () => {
+    const blank = { qwen_edit_2511: [] as string[], qwen_image_2_1_8gb_edit: [], qwen_image_2_1_8gb_t2i: [], minimax_h3: [] };
+    const edit = updateWorkflowValue(blank, "qwen_image_2_1_8gb_edit", ["target", "reference"]);
+    const video = updateWorkflowValue(edit, "minimax_h3", ["video-reference"]);
+    expect(video.qwen_image_2_1_8gb_edit).toEqual(["target", "reference"]);
+    expect(video.minimax_h3).toEqual(["video-reference"]);
+    expect(video.qwen_image_2_1_8gb_t2i).toEqual([]);
+    expect(edit.qwen_image_2_1_8gb_edit).toEqual(["target", "reference"]);
+  });
+
+  it("calculates edit dimensions at 0.5x, 1x, and 2x while preserving portrait and landscape ratios", () => {
+    expect(calculateEditDimensions(1024, 768, 0.5)).toEqual({ width: 512, height: 384, adjusted: false });
+    expect(calculateEditDimensions(1024, 768, 1)).toEqual({ width: 1024, height: 768, adjusted: false });
+    expect(calculateEditDimensions(1024, 768, 2)).toEqual({ width: 2048, height: 1536, adjusted: false });
+    const portrait = calculateEditDimensions(768, 1024, 1.1);
+    const landscape = calculateEditDimensions(1536, 1024, 0.8);
+    expect(portrait.width % 32).toBe(0);
+    expect(portrait.height % 32).toBe(0);
+    expect(Math.abs(portrait.width / portrait.height / (768 / 1024) - 1)).toBeLessThan(0.03);
+    expect(Math.abs(landscape.width / landscape.height / (1536 / 1024) - 1)).toBeLessThan(0.03);
+    expect(calculateEditDimensions(640, 480, 1.1)).toEqual({ width: 704, height: 544, adjusted: true });
+    expect(initialEditScale(4000, 3000)).toBe(0.5);
+    expect(calculateEditDimensions(4000, 3000, initialEditScale(4000, 3000))).toEqual({ width: 2016, height: 1504, adjusted: true });
+  });
+
+  it("keeps the edit aspect ratio when width or height changes and rejects unsafe bounds", () => {
+    expect(lockEditDimensions(1200, 800, "width", 640)).toEqual({ width: 640, height: 416, adjusted: true });
+    expect(lockEditDimensions(1200, 800, "height", 640)).toEqual({ width: 960, height: 640, adjusted: false });
+    expect(() => calculateEditDimensions(4000, 3000, 1)).toThrow();
+    expect(() => calculateEditDimensions(1000, 800, 0.4)).toThrow();
+    expect(() => lockEditDimensions(1000, 800, "width", 0)).toThrow();
+  });
+
+  it("calculates T2I dimensions for each video ratio with 8-pixel alignment and a 2048 cap", () => {
+    for (const ratio of Object.keys(VIDEO_RATIOS)) {
+      const size = calculateImageDimensions(ratio, 1);
+      expect(size.width % 8).toBe(0);
+      expect(size.height % 8).toBe(0);
+      expect(size.width).toBeLessThanOrEqual(2048);
+      expect(size.height).toBeLessThanOrEqual(2048);
+    }
+    expect(() => calculateImageDimensions("bad", 1)).toThrow();
+    expect(() => calculateImageDimensions("1:1", 2)).toThrow();
   });
 });

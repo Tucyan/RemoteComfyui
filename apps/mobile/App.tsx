@@ -22,18 +22,28 @@ import {
 } from "react-native";
 import { RemoteApi, type Artifact, type GenerationJob, type Library, type LibraryImage } from "./src/api/client";
 import { ReferenceImageStrip, type ReferenceItem } from "./src/components/ReferenceImageStrip";
+import { ImageSettings, type EditImageSettingsDraft, type T2IImageSettingsDraft } from "./src/components/ImageSettings";
 import { VideoSettings, type VideoDraft } from "./src/components/VideoSettings";
+import { WorkflowPicker } from "./src/components/WorkflowPicker";
 import { ZoomableImage } from "./src/components/ZoomableImage";
 import {
   insertPictureToken,
   calculateVideoDimensions,
   formatElapsed,
-  updateModePrompt,
+  updateWorkflowPrompt,
+  updateWorkflowValue,
   moveReference,
   normalizeReferences,
   renumberPictureTokens,
   validateReferenceCount,
   validateVideoSettings,
+  calculateEditDimensions,
+  initialEditScale,
+  lockEditDimensions,
+  calculateImageDimensions,
+  normalizeImageDimensions,
+  WORKFLOW_DESCRIPTORS,
+  type WorkflowId,
 } from "./src/domain/draft";
 import { PairingStore, type PairingDetails } from "./src/storage/pairing";
 
@@ -102,20 +112,36 @@ function PairScreen({ onPaired }: { onPaired: (details: PairingDetails) => Promi
 function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: PairingDetails; onUnpair: () => Promise<void> }) {
   const [tab, setTab] = useState<Tab>("generate");
   const [librarySelectionMode, setLibrarySelectionMode] = useState(false);
-  const [mode, setMode] = useState<"image" | "video">("image");
-  const [prompts, setPrompts] = useState({ image: "", video: "" });
-  const prompt = prompts[mode];
-  const setPrompt = (value: string | ((previous: string) => string)) => setPrompts((previous) => updateModePrompt(previous, mode, typeof value === "function" ? value(previous[mode]) : value));
-  const [references, setReferences] = useState<Ref[]>([]);
+  const [workflow, setWorkflow] = useState<WorkflowId>("qwen_edit_2511");
+  const [prompts, setPrompts] = useState<Record<WorkflowId, string>>({ qwen_edit_2511: "", qwen_image_2_1_8gb_edit: "", qwen_image_2_1_8gb_t2i: "", minimax_h3: "" });
+  const prompt = prompts[workflow];
+  const setPrompt = (value: string | ((previous: string) => string)) => setPrompts((previous) => updateWorkflowPrompt(previous, workflow, typeof value === "function" ? value(previous[workflow]) : value));
+  const [referencesByWorkflow, setReferencesByWorkflow] = useState<Record<WorkflowId, Ref[]>>({ qwen_edit_2511: [], qwen_image_2_1_8gb_edit: [], qwen_image_2_1_8gb_t2i: [], minimax_h3: [] });
+  const references = referencesByWorkflow[workflow];
   const [videoDraft, setVideoDraft] = useState<VideoDraft>({ ratio: "9:16", quality: 0.4, custom: false, width: "480", height: "864", frames: "124" });
+  const [editDraft, setEditDraft] = useState<EditImageSettingsDraft>({ editSizeMode: "scale", sizeAnchor: "width", scaleFactor: 1, width: "", height: "" });
+  const [t2iDraft, setT2iDraft] = useState<T2IImageSettingsDraft>({ ratio: "1:1", quality: 1, custom: false, width: "1024", height: "1024" });
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const importingLibrary = useRef(false);
+  const uploadingReferences = useRef(false);
   const replaceReferences = (next: Ref[]) => {
-    setReferences(next);
-    setPrompt((current) => renumberPictureTokens(current, next.map((item) => item.assetId)));
+    const previous = references;
+    setReferencesByWorkflow((current) => updateWorkflowValue(current, workflow, next));
+    setPrompts((current) => ({ ...current, [workflow]: renumberPictureTokens(current[workflow], next.map((item) => item.assetId)) }));
+    if (workflow === "qwen_image_2_1_8gb_edit" && previous[0]?.assetId !== next[0]?.assetId && next[0]?.width && next[0]?.height) {
+      const scaleFactor = initialEditScale(next[0].width, next[0].height);
+      try {
+        const dimensions = calculateEditDimensions(next[0].width, next[0].height, scaleFactor);
+        setEditDraft({ editSizeMode: "scale", sizeAnchor: "width", scaleFactor, width: String(dimensions.width), height: String(dimensions.height) });
+      } catch {
+        const anchor = next[0].width >= next[0].height ? "width" : "height";
+        const dimensions = lockEditDimensions(next[0].width, next[0].height, anchor, 2048);
+        setEditDraft({ editSizeMode: "dimensions", sizeAnchor: anchor, scaleFactor, width: String(dimensions.width), height: String(dimensions.height) });
+      }
+    }
   };
 
   const refreshJobs = async () => { try { setJobs((await api.listJobs()).jobs); } catch (cause) { setMessage(errorText(cause)); } };
@@ -129,27 +155,33 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
   }, [api]);
 
   async function pickReferences() {
-    const remaining = (mode === "image" ? 3 : 9) - references.length;
-    if (remaining <= 0) { setMessage(`当前模式最多 ${mode === "image" ? 3 : 9} 张参考图`); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.95 });
-    if (result.canceled) return;
+    if (uploadingReferences.current || busy) return;
+    const maximum = WORKFLOW_DESCRIPTORS[workflow].maxReferences;
+    const remaining = maximum - references.length;
+    if (remaining <= 0) { setMessage(maximum === 0 ? "当前工作流不使用参考图" : `当前工作流最多 ${maximum} 张参考图`); return; }
+    uploadingReferences.current = true;
     setBusy(true); setMessage("");
     try {
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.95 });
+      if (result.canceled) return;
       const uploaded = await api.uploadImages(result.assets.map((asset, index) => ({ uri: asset.uri, name: asset.fileName || `reference-${index + 1}.jpg`, type: asset.mimeType || "image/jpeg" })));
-      const next = uploaded.assets.map((asset, index) => ({ id: asset.id, assetId: asset.id, name: asset.filename, uri: result.assets[index]?.uri }));
+      const next = uploaded.assets.map((asset, index) => ({ id: asset.id, assetId: asset.id, name: asset.filename, uri: result.assets[index]?.uri, width: asset.width, height: asset.height }));
       replaceReferences([...references, ...next]);
-    } catch (cause) { setMessage(errorText(cause)); } finally { setBusy(false); }
+    } catch (cause) { setMessage(errorText(cause)); } finally { uploadingReferences.current = false; setBusy(false); }
   }
 
   async function submit() {
     setMessage("");
     const refs = normalizeReferences(references.map((item) => item.assetId));
     if (!prompt.trim()) { setMessage("请先输入提示词"); return; }
-    if (!validateReferenceCount(mode, refs.length)) { setMessage(`请添加 ${mode === "image" ? "1-3" : "1-9"} 张参考图`); return; }
+    if (!validateReferenceCount(workflow, refs.length)) {
+      const descriptor = WORKFLOW_DESCRIPTORS[workflow];
+      setMessage(descriptor.minReferences === 0 ? "当前工作流不接受参考图" : `请添加 ${descriptor.minReferences}-${descriptor.maxReferences} 张参考图`);
+      return;
+    }
     setBusy(true);
     try {
-      if (mode === "image") await api.createImageJob(prompt.trim(), refs);
-      else {
+      if (workflow === "minimax_h3") {
         const calculated = calculateVideoDimensions(videoDraft.ratio, videoDraft.quality);
         const width = videoDraft.custom ? Number(videoDraft.width) : calculated.width;
         const height = videoDraft.custom ? Number(videoDraft.height) : calculated.height;
@@ -157,6 +189,28 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
         const settings = validateVideoSettings(width, height, frames);
         if (!settings.ok) { setMessage(settings.error); return; }
         await api.createVideoJob(prompt.trim(), refs, settings.width, settings.height, frames);
+      } else if (workflow === "qwen_edit_2511") {
+        await api.createImageJob({ prompt: prompt.trim(), workflow, referenceAssetIds: refs });
+      } else if (workflow === "qwen_image_2_1_8gb_edit") {
+        const first = references[0];
+        if (!first?.width || !first?.height) { setMessage("无法读取首张参考图的尺寸，请重新添加图片"); return; }
+        if (editDraft.editSizeMode === "scale") {
+          await api.createImageJob({ prompt: prompt.trim(), workflow, referenceAssetIds: refs, editSizeMode: "scale", scaleFactor: editDraft.scaleFactor });
+        } else {
+          const dimensions = editDraft[editDraft.sizeAnchor].trim()
+            ? lockEditDimensions(first.width, first.height, editDraft.sizeAnchor, Number(editDraft[editDraft.sizeAnchor]))
+            : null;
+          const width = dimensions?.width ?? Number(editDraft.width);
+          const height = dimensions?.height ?? Number(editDraft.height);
+          if (!Number.isInteger(width) || !Number.isInteger(height) || width < 32 || height < 32 || width > 2048 || height > 2048 || width % 32 || height % 32) throw new Error("编辑尺寸必须为 32 的倍数，且在 32～2048 像素之间");
+          await api.createImageJob({ prompt: prompt.trim(), workflow, referenceAssetIds: refs, editSizeMode: "dimensions", width, height });
+        }
+      } else {
+        const calculated = calculateImageDimensions(t2iDraft.ratio, t2iDraft.quality);
+        const dimensions = t2iDraft.custom
+          ? normalizeImageDimensions(Number(t2iDraft.width), Number(t2iDraft.height))
+          : calculated;
+        await api.createImageJob({ prompt: prompt.trim(), workflow, referenceAssetIds: [], width: dimensions.width, height: dimensions.height });
       }
       setMessage("任务已进入队列");
       setTab("tasks");
@@ -168,18 +222,18 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
   return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><View style={styles.appShell}>
     <View style={styles.header}><View><Text style={styles.headerTitle}>Remote ComfyUI</Text><Text style={styles.headerSub}>{pairing.baseUrl}</Text></View><View style={styles.statusDot} /></View>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      {tab === "generate" && <GeneratePage mode={mode} setMode={setMode} prompt={prompt} setPrompt={(value) => setPrompt(renumberPictureTokens(value, references.map((item) => item.assetId)))} references={currentRefs} onPick={pickReferences} onPickLibrary={() => { setLibrarySelectionMode(true); setTab("library"); }} onMove={(from, to) => replaceReferences(moveReference(references, from, to))} onRemove={(index) => replaceReferences(references.filter((_, itemIndex) => itemIndex !== index))} onInsert={(index) => setPrompt((value) => insertPictureToken(value, index))} videoDraft={videoDraft} setVideoDraft={setVideoDraft} onSubmit={submit} busy={busy} message={message} />}
+      {tab === "generate" && <GeneratePage workflow={workflow} setWorkflow={setWorkflow} prompt={prompt} setPrompt={(value) => setPrompt(renumberPictureTokens(value, references.map((item) => item.assetId)))} references={currentRefs} onPick={pickReferences} onPickLibrary={() => { setLibrarySelectionMode(true); setTab("library"); }} onMove={(from, to) => replaceReferences(moveReference(references, from, to))} onRemove={(index) => replaceReferences(references.filter((_, itemIndex) => itemIndex !== index))} onInsert={(index) => setPrompt((value) => insertPictureToken(value, index))} videoDraft={videoDraft} setVideoDraft={setVideoDraft} editDraft={editDraft} setEditDraft={setEditDraft} t2iDraft={t2iDraft} setT2iDraft={setT2iDraft} onSubmit={submit} busy={busy} message={message} />}
       {tab === "tasks" && <TasksPage jobs={jobs} onRefresh={refreshJobs} />}
       {tab === "artifacts" && <ArtifactsPage artifacts={artifacts} api={api} onRefresh={refreshArtifacts} />}
       {tab === "library" && <LibraryPage api={api} selectionMode={librarySelectionMode} importing={busy} onUse={async (image) => {
         if (importingLibrary.current) return;
-        const maximum = mode === "image" ? 3 : 9;
-        if (references.length >= maximum) { setMessage(`当前模式最多 ${maximum} 张参考图`); setTab("generate"); return; }
+        const maximum = WORKFLOW_DESCRIPTORS[workflow].maxReferences;
+        if (maximum === 0 || references.length >= maximum) { setMessage(maximum === 0 ? "当前工作流不使用参考图" : `当前工作流最多 ${maximum} 张参考图`); setTab("generate"); return; }
         importingLibrary.current = true;
         setBusy(true); setMessage("");
         try {
           const uploaded = await api.importLibraryImage(image);
-          replaceReferences([...references, { id: uploaded.id, assetId: uploaded.id, name: uploaded.filename }]);
+          replaceReferences([...references, { id: uploaded.id, assetId: uploaded.id, name: uploaded.filename, width: uploaded.width, height: uploaded.height }]);
           setTab("generate"); setMessage(`已加入 ${image.name}`);
         } catch (cause) { setMessage(errorText(cause)); setTab("generate"); } finally { importingLibrary.current = false; setBusy(false); }
       }} />}
@@ -189,20 +243,24 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
   </View></SafeAreaView>;
 }
 
-function GeneratePage({ mode, setMode, prompt, setPrompt, references, onPick, onPickLibrary, onMove, onRemove, onInsert, videoDraft, setVideoDraft, onSubmit, busy, message }: { mode: "image" | "video"; setMode: (mode: "image" | "video") => void; prompt: string; setPrompt: (value: string) => void; references: ReferenceItem[]; onPick: () => Promise<void>; onPickLibrary: () => void; onMove: (from: number, to: number) => void; onRemove: (index: number) => void; onInsert: (index: number) => void; videoDraft: VideoDraft; setVideoDraft: (value: VideoDraft) => void; onSubmit: () => Promise<void>; busy: boolean; message: string }) {
-  return <View style={styles.page}><Text style={styles.pageTitle}>开始生成</Text><View style={styles.segment}><Pressable onPress={() => setMode("image")} style={[styles.segmentItem, mode === "image" && styles.segmentSelected]}><Text style={mode === "image" ? styles.segmentTextSelected : styles.segmentText}>图片编辑</Text></Pressable><Pressable onPress={() => setMode("video")} style={[styles.segmentItem, mode === "video" && styles.segmentSelected]}><Text style={mode === "video" ? styles.segmentTextSelected : styles.segmentText}>参考图生视频</Text></Pressable></View>
-    <Text style={styles.fieldLabel}>提示词</Text><TextInput multiline textAlignVertical="top" value={prompt} onChangeText={setPrompt} placeholder="描述你想要的结果，可插入 <Picture N>" style={[styles.input, styles.promptInput]} />
-    <View style={styles.rowBetween}><Text style={styles.fieldLabel}>参考图 ({references.length}/{mode === "image" ? 3 : 9})</Text><View style={styles.rowActions}><Pressable onPress={onPickLibrary} style={styles.textButton}><Text style={styles.textButtonText}>从图库中选择</Text></Pressable><Pressable onPress={onPick} style={styles.textButton}><Text style={styles.textButtonText}>从手机选择</Text></Pressable></View></View>
-    <ReferenceImageStrip items={references} onMove={onMove} onRemove={onRemove} onInsertToken={onInsert} />
-    {mode === "video" && <VideoSettings value={videoDraft} onChange={setVideoDraft} />}
-    {message ? <Text style={message.includes("已进入") ? styles.success : styles.error}>{message}</Text> : null}<PrimaryButton title={busy ? "处理中..." : mode === "image" ? "提交图片任务" : "提交视频任务"} onPress={onSubmit} disabled={busy} />
+function GeneratePage({ workflow, setWorkflow, prompt, setPrompt, references, onPick, onPickLibrary, onMove, onRemove, onInsert, videoDraft, setVideoDraft, editDraft, setEditDraft, t2iDraft, setT2iDraft, onSubmit, busy, message }: { workflow: WorkflowId; setWorkflow: (workflow: WorkflowId) => void; prompt: string; setPrompt: (value: string) => void; references: ReferenceItem[]; onPick: () => Promise<void>; onPickLibrary: () => void; onMove: (from: number, to: number) => void; onRemove: (index: number) => void; onInsert: (index: number) => void; videoDraft: VideoDraft; setVideoDraft: (value: VideoDraft) => void; editDraft: EditImageSettingsDraft; setEditDraft: (value: EditImageSettingsDraft) => void; t2iDraft: T2IImageSettingsDraft; setT2iDraft: (value: T2IImageSettingsDraft) => void; onSubmit: () => Promise<void>; busy: boolean; message: string }) {
+  const descriptor = WORKFLOW_DESCRIPTORS[workflow];
+  const usesReferences = descriptor.maxReferences > 0;
+  return <View style={styles.page}><Text style={styles.pageTitle}>开始生成</Text><WorkflowPicker value={workflow} onChange={setWorkflow} disabled={busy} />
+    <Text style={styles.fieldLabel}>提示词</Text><TextInput multiline textAlignVertical="top" value={prompt} onChangeText={setPrompt} placeholder={usesReferences ? "描述你想要的结果，可插入 <Picture N>" : "描述你想生成的图片"} style={[styles.input, styles.promptInput]} />
+    {usesReferences && <><View style={styles.rowBetween}><Text style={styles.fieldLabel}>参考图 ({references.length}/{descriptor.maxReferences}){workflow === "qwen_image_2_1_8gb_edit" ? " · 第一张为目标图" : ""}</Text><View style={styles.rowActions}><Pressable disabled={busy} onPress={onPickLibrary} style={[styles.textButton, busy && styles.disabled]}><Text style={styles.textButtonText}>从图库中选择</Text></Pressable><Pressable disabled={busy} onPress={onPick} style={[styles.textButton, busy && styles.disabled]}><Text style={styles.textButtonText}>从手机选择</Text></Pressable></View></View>
+      <ReferenceImageStrip items={references} onMove={onMove} onRemove={onRemove} onInsertToken={onInsert} /></>}
+    {workflow === "qwen_image_2_1_8gb_edit" && <ImageSettings workflow={workflow} value={editDraft} onChange={(next) => setEditDraft(next as EditImageSettingsDraft)} source={references[0]?.width && references[0]?.height ? { width: references[0].width, height: references[0].height } : undefined} />}
+    {workflow === "qwen_image_2_1_8gb_t2i" && <ImageSettings workflow={workflow} value={t2iDraft} onChange={(next) => setT2iDraft(next as T2IImageSettingsDraft)} />}
+    {workflow === "minimax_h3" && <VideoSettings value={videoDraft} onChange={setVideoDraft} />}
+    {message ? <Text style={message.includes("已进入") ? styles.success : styles.error}>{message}</Text> : null}<PrimaryButton title={busy ? "处理中..." : workflow === "minimax_h3" ? "提交视频任务" : workflow === "qwen_edit_2511" || workflow === "qwen_image_2_1_8gb_edit" ? "提交图片编辑任务" : "提交文生图任务"} onPress={onSubmit} disabled={busy} />
   </View>;
 }
 
 function TasksPage({ jobs, onRefresh }: { jobs: GenerationJob[]; onRefresh: () => Promise<void> }) {
   const [now, setNow] = useState(Date.now() / 1000);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now() / 1000), 1000); return () => clearInterval(timer); }, []);
-  return <View style={styles.page}><View style={styles.rowBetween}><Text style={styles.pageTitle}>任务</Text><Pressable onPress={onRefresh} style={styles.textButton}><Text style={styles.textButtonText}>刷新</Text></Pressable></View>{jobs.length === 0 ? <Text style={styles.emptyPage}>还没有任务</Text> : jobs.map((job) => <View key={job.id} style={styles.rowItem}><View style={styles.rowMain}><Text style={styles.rowTitle}>{job.kind === "image" ? "图片编辑" : "参考图生视频"}</Text><Text style={styles.rowSub}>{job.id.slice(-8)} · {job.status}</Text>{job.status === "running" && job.started_at ? <Text style={styles.status}>{formatElapsed(job.started_at, now)}</Text> : null}{job.error ? <Text style={styles.error}>{job.error}</Text> : null}</View><Text style={styles.status}>{job.artifacts.length ? `${job.artifacts.length} 个产物` : ""}</Text></View>)}</View>;
+  return <View style={styles.page}><View style={styles.rowBetween}><Text style={styles.pageTitle}>任务</Text><Pressable onPress={onRefresh} style={styles.textButton}><Text style={styles.textButtonText}>刷新</Text></Pressable></View>{jobs.length === 0 ? <Text style={styles.emptyPage}>还没有任务</Text> : jobs.map((job) => { const knownWorkflow = job.workflow && Object.prototype.hasOwnProperty.call(WORKFLOW_DESCRIPTORS, job.workflow) ? WORKFLOW_DESCRIPTORS[job.workflow].label : undefined; return <View key={job.id} style={styles.rowItem}><View style={styles.rowMain}><Text style={styles.rowTitle}>{knownWorkflow || (job.kind === "image" ? "图片编辑" : "参考图生视频")}</Text><Text style={styles.rowSub}>{job.id.slice(-8)} · {job.status}</Text>{job.status === "running" && job.started_at ? <Text style={styles.status}>{formatElapsed(job.started_at, now)}</Text> : null}{job.error ? <Text style={styles.error}>{job.error}</Text> : null}</View><Text style={styles.status}>{job.artifacts.length ? `${job.artifacts.length} 个产物` : ""}</Text></View>; })}</View>;
 }
 
 function ArtifactsPage({ artifacts, api, onRefresh }: { artifacts: Artifact[]; api: RemoteApi; onRefresh: () => Promise<void> }) {
