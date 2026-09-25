@@ -21,6 +21,8 @@ import {
   View,
 } from "react-native";
 import { RemoteApi, type Artifact, type GenerationJob, type Library, type LibraryImage } from "./src/api/client";
+import { LibraryCache } from "./src/domain/libraryCache";
+import { shouldRefreshArtifacts } from "./src/domain/jobRefresh";
 import { ReferenceImageStrip, type ReferenceItem } from "./src/components/ReferenceImageStrip";
 import { ImageSettings, type EditImageSettingsDraft, type T2IImageSettingsDraft } from "./src/components/ImageSettings";
 import { VideoSettings, type VideoDraft } from "./src/components/VideoSettings";
@@ -112,6 +114,7 @@ function PairScreen({ onPaired }: { onPaired: (details: PairingDetails) => Promi
 
 function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: PairingDetails; onUnpair: () => Promise<void> }) {
   const [tab, setTab] = useState<Tab>("generate");
+  const libraryCache = useMemo(() => new LibraryCache(), [api]);
   const [librarySelectionMode, setLibrarySelectionMode] = useState(false);
   const [workflow, setWorkflow] = useState<WorkflowId>("qwen_edit_2511");
   const [prompts, setPrompts] = useState<Record<WorkflowId, string>>({ qwen_edit_2511: "", qwen_image_2_1_8gb_edit: "", qwen_image_2_1_8gb_t2i: "", minimax_h3: "" });
@@ -123,6 +126,8 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
   const [editDraft, setEditDraft] = useState<EditImageSettingsDraft>({ editSizeMode: "scale", sizeAnchor: "width", scaleFactor: 1, width: "", height: "" });
   const [t2iDraft, setT2iDraft] = useState<T2IImageSettingsDraft>({ ratio: "1:1", quality: 1, custom: false, width: "1024", height: "1024" });
   const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const jobsSnapshot = useRef<GenerationJob[]>([]);
+  const pollingJobs = useRef(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -145,7 +150,18 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
     }
   };
 
-  const refreshJobs = async () => { try { setJobs((await api.listJobs()).jobs); } catch (cause) { setMessage(errorText(cause)); } };
+  const refreshJobs = async () => {
+    if (pollingJobs.current) return;
+    pollingJobs.current = true;
+    try {
+      const next = (await api.listJobs()).jobs;
+      const refreshProduced = shouldRefreshArtifacts(jobsSnapshot.current, next);
+      setJobs(next);
+      if (refreshProduced) setArtifacts((await api.listArtifacts()).artifacts);
+      jobsSnapshot.current = next;
+    } catch (cause) { setMessage(errorText(cause)); }
+    finally { pollingJobs.current = false; }
+  };
   const refreshArtifacts = async () => { try { setArtifacts((await api.listArtifacts()).artifacts); } catch (cause) { setMessage(errorText(cause)); } };
 
   useEffect(() => {
@@ -226,7 +242,7 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
       {tab === "generate" && <GeneratePage workflow={workflow} setWorkflow={setWorkflow} prompt={prompt} setPrompt={(value) => setPrompt(renumberPictureTokens(value, references.map((item) => item.assetId)))} references={currentRefs} onPick={pickReferences} onPickLibrary={() => { setLibrarySelectionMode(true); setTab("library"); }} onMove={(from, to) => replaceReferences(moveReference(references, from, to))} onRemove={(index) => replaceReferences(references.filter((_, itemIndex) => itemIndex !== index))} onInsert={(index) => setPrompt((value) => insertPictureToken(value, index))} videoDraft={videoDraft} setVideoDraft={setVideoDraft} editDraft={editDraft} setEditDraft={setEditDraft} t2iDraft={t2iDraft} setT2iDraft={setT2iDraft} onSubmit={submit} busy={busy} message={message} />}
       {tab === "tasks" && <TasksPage jobs={jobs} onRefresh={refreshJobs} />}
       {tab === "artifacts" && <ArtifactsPage artifacts={artifacts} api={api} onRefresh={refreshArtifacts} />}
-      {tab === "library" && <LibraryPage api={api} selectionMode={librarySelectionMode} importing={busy} onUse={async (image) => {
+      {tab === "library" && <LibraryPage api={api} cache={libraryCache} selectionMode={librarySelectionMode} importing={busy} onUse={async (image) => {
         if (importingLibrary.current) return;
         const maximum = WORKFLOW_DESCRIPTORS[workflow].maxReferences;
         if (maximum === 0 || references.length >= maximum) { setMessage(maximum === 0 ? "当前工作流不使用参考图" : `当前工作流最多 ${maximum} 张参考图`); setTab("generate"); return; }
@@ -302,28 +318,68 @@ function VideoArtifactThumbnail({ artifact, api }: { artifact: Artifact; api: Re
   return <View style={styles.videoThumbnail}><VideoView player={player} nativeControls={false} contentFit="cover" surfaceType="textureView" style={styles.previewImage} /><View style={styles.playBadge}><Text style={styles.playBadgeText}>▶</Text></View></View>;
 }
 
-function LibraryPage({ api, selectionMode, importing, onUse }: { api: RemoteApi; selectionMode: boolean; importing: boolean; onUse: (image: LibraryImage) => Promise<void> }) {
-  const [libraries, setLibraries] = useState<Library[]>([]); const [selected, setSelected] = useState<Library | null>(null); const [images, setImages] = useState<LibraryImage[]>([]); const [error, setError] = useState("");
+function LibraryPage({ api, cache, selectionMode, importing, onUse }: { api: RemoteApi; cache: LibraryCache; selectionMode: boolean; importing: boolean; onUse: (image: LibraryImage) => Promise<void> }) {
+  const [libraries, setLibraries] = useState<Library[]>(() => cache.libraries ?? []);
+  const [selected, setSelected] = useState<Library | null>(() => cache.libraries?.find((item) => item.id === cache.selectedId) ?? null);
+  const [images, setImages] = useState<LibraryImage[]>(() => cache.selectedId ? cache.get(cache.selectedId)?.images ?? [] : []);
+  const [error, setError] = useState("");
   const [preview, setPreview] = useState<LibraryImage | null>(null);
   const [saving, setSaving] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
+  const [hasMore, setHasMore] = useState(() => cache.selectedId ? cache.get(cache.selectedId)?.hasMore ?? false : false);
   const [loadingMore, setLoadingMore] = useState(false);
-  useEffect(() => { api.listLibraries().then((result) => { setLibraries(result.libraries); if (result.libraries[0]) setSelected(result.libraries[0]); }).catch((cause) => setError(errorText(cause))); }, [api]);
+  const [loading, setLoading] = useState(() => cache.libraries === null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const requestId = useRef(0);
   useEffect(() => {
     let active = true;
-    setImages([]); setHasMore(false);
-    if (selected) api.listLibraryImages(selected.id).then((result) => { if (active) { setImages(result.images); setHasMore(result.images.length === 50); } }).catch((cause) => { if (active) setError(errorText(cause)); });
+    api.listLibraries().then((result) => {
+      if (!active) return;
+      cache.reconcile(result.libraries);
+      setLibraries(result.libraries);
+      const target = result.libraries.find((item) => item.id === (selected?.id ?? cache.selectedId)) ?? result.libraries[0] ?? null;
+      setLoading(Boolean(target && !cache.get(target.id)));
+      setSelected((current) => {
+        const next = result.libraries.find((item) => item.id === (current?.id ?? cache.selectedId)) ?? result.libraries[0] ?? null;
+        return current?.id === next?.id ? current : next;
+      });
+      setError("");
+    }).catch((cause) => { if (active) { setLoading(false); setError(errorText(cause)); } });
     return () => { active = false; };
-  }, [api, selected]);
+  }, [api, cache, retry]);
+  useEffect(() => {
+    let active = true;
+    const currentRequest = ++requestId.current;
+    if (!selected) { setImages([]); setHasMore(false); setRefreshing(false); return () => { active = false; }; }
+    cache.selectedId = selected.id;
+    const stored = cache.get(selected.id);
+    setImages(stored?.images ?? []);
+    setHasMore(stored?.hasMore ?? false);
+    setLoading(!stored);
+    setRefreshing(true);
+    setError("");
+    api.listLibraryImages(selected.id).then((result) => {
+      if (!active || requestId.current !== currentRequest) return;
+      const more = result.images.length === 50;
+      cache.set(selected.id, result.images, more);
+      setImages(result.images);
+      setHasMore(more);
+      setError("");
+    }).catch((cause) => { if (active && requestId.current === currentRequest) setError(errorText(cause)); })
+      .finally(() => { if (active && requestId.current === currentRequest) { setLoading(false); setRefreshing(false); } });
+    return () => { active = false; requestId.current++; };
+  }, [api, cache, selected?.id, retry]);
   async function loadMore() {
-    if (!selected || loadingMore || !hasMore) return;
+    if (!selected || loadingMore || refreshing || !hasMore) return;
+    const currentRequest = requestId.current;
     setLoadingMore(true);
     try {
       const result = await api.listLibraryImages(selected.id, images.length);
+      if (requestId.current !== currentRequest) return;
       setImages((current) => [...current, ...result.images]);
       setHasMore(result.images.length === 50);
-    } catch (cause) { setError(errorText(cause)); }
-    finally { setLoadingMore(false); }
+    } catch (cause) { if (requestId.current === currentRequest) setError(errorText(cause)); }
+    finally { if (requestId.current === currentRequest) setLoadingMore(false); }
   }
   async function saveImage(image: LibraryImage) {
     setSaving(true);
@@ -340,7 +396,7 @@ function LibraryPage({ api, selectionMode, importing, onUse }: { api: RemoteApi;
     } catch (cause) { Alert.alert("保存失败", errorText(cause)); }
     finally { setSaving(false); }
   }
-  return <View style={styles.page}><Text style={styles.pageTitle}>{selectionMode ? "选择电脑参考图" : "电脑图库"}</Text>{selectionMode && <Text style={styles.rowSub}>{importing ? "正在加入参考图..." : "点击图片，将其加入当前生成任务。"}</Text>}{error ? <Text style={styles.error}>{error}</Text> : null}<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.libraryTabs}>{libraries.map((library) => <Pressable key={library.id} onPress={() => setSelected(library)} style={[styles.libraryTab, selected?.id === library.id && styles.libraryTabActive]}><Text>{library.name}</Text></Pressable>)}</ScrollView>{selected && images.length === 0 ? <Text style={styles.emptyPage}>该目录暂时没有图片</Text> : <View style={styles.imageGrid}>{images.map((image) => <Pressable key={image.id} disabled={selectionMode && importing} accessibilityLabel={selectionMode ? `添加参考图 ${image.name}` : `预览图片 ${image.name}`} onPress={() => selectionMode ? void onUse(image) : setPreview(image)} style={[styles.libraryImage, selectionMode && importing && styles.disabled]}><Image source={{ uri: api.mediaUrl(image.thumbnail_url), headers: { Authorization: `Bearer ${getToken(api)}` } }} style={styles.libraryThumb} /><Text numberOfLines={1} style={styles.imageName}>{image.name}</Text></Pressable>)}</View>}{hasMore && <Pressable disabled={loadingMore} onPress={() => void loadMore()} style={styles.secondaryButton}><Text style={styles.textButtonText}>{loadingMore ? "加载中..." : "加载更多图片"}</Text></Pressable>}
+  return <View style={styles.page}><Text style={styles.pageTitle}>{selectionMode ? "选择电脑参考图" : "电脑图库"}</Text>{selectionMode && <Text style={styles.rowSub}>{importing ? "正在加入参考图..." : "点击图片，将其加入当前生成任务。"}</Text>}{error ? <View><Text style={styles.error}>{error}</Text><Pressable onPress={() => setRetry((value) => value + 1)}><Text style={styles.textButtonText}>重试</Text></Pressable></View> : null}<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.libraryTabs}>{libraries.map((library) => <Pressable key={library.id} onPress={() => setSelected(library)} style={[styles.libraryTab, selected?.id === library.id && styles.libraryTabActive]}><Text>{library.name}</Text></Pressable>)}</ScrollView>{loading && images.length === 0 ? <Text style={styles.emptyPage}>正在加载图片...</Text> : !selected && !loading && !error ? <Text style={styles.emptyPage}>尚未配置图库目录</Text> : selected && images.length === 0 && !error ? <Text style={styles.emptyPage}>该目录暂时没有图片</Text> : <View style={styles.imageGrid}>{images.map((image) => <Pressable key={image.id} disabled={selectionMode && importing} accessibilityLabel={selectionMode ? `添加参考图 ${image.name}` : `预览图片 ${image.name}`} onPress={() => selectionMode ? void onUse(image) : setPreview(image)} style={[styles.libraryImage, selectionMode && importing && styles.disabled]}><Image source={{ uri: api.mediaUrl(`${image.thumbnail_url}?v=${image.mtime}-${image.size}`), headers: { Authorization: `Bearer ${getToken(api)}` } }} style={styles.libraryThumb} /><Text numberOfLines={1} style={styles.imageName}>{image.name}</Text></Pressable>)}</View>}{hasMore && <Pressable disabled={loadingMore || refreshing} onPress={() => void loadMore()} style={styles.secondaryButton}><Text style={styles.textButtonText}>{loadingMore ? "加载中..." : "加载更多图片"}</Text></Pressable>}
     <Modal visible={preview !== null} animationType="slide" onRequestClose={() => setPreview(null)}><SafeAreaView style={styles.viewer}><View style={styles.viewerHeader}><Pressable onPress={() => setPreview(null)}><Text style={styles.viewerControl}>关闭</Text></Pressable><Pressable disabled={saving} onPress={() => preview && void saveImage(preview)}><Text style={styles.viewerControl}>{saving ? "保存中..." : "保存到手机"}</Text></Pressable></View>{preview && <ZoomableImage key={preview.id} source={{ uri: api.mediaUrl(preview.content_url), headers: { Authorization: `Bearer ${getToken(api)}` } }} />}</SafeAreaView></Modal>
   </View>;
 }

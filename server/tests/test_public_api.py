@@ -120,6 +120,74 @@ async def test_library_image_can_be_imported_as_reference_without_phone_reupload
 
 
 @pytest.mark.asyncio
+async def test_library_thumbnail_is_small_cached_and_invalidated(tmp_path, monkeypatch):
+    from app.api import public
+
+    settings = __import__("app.settings", fromlist=["Settings"]).Settings(_env_file=None, data_dir=str(tmp_path / "data"))
+    pairing = PairingService(tmp_path / "pairing.db")
+    token = pairing.redeem_pairing_code(pairing.create_pairing_code(), "phone")
+    source = tmp_path / "gallery"
+    source.mkdir()
+    image_path = source / "sample.png"
+    image_path.write_bytes(_image_bytes("PNG", (2400, 1600)))
+    libraries = SimpleNamespace(load=lambda: [SimpleNamespace(id="gallery", name="Gallery", path=str(source), enabled=True, recursive=True)])
+    app = create_public_app(settings, pairing_service=pairing, library_service=libraries)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get("/api/v1/libraries/gallery/images", headers=headers)
+        image = listing.json()["images"][0]
+        assert (await client.get(image["thumbnail_url"])).status_code == 401
+        first = await client.get(image["thumbnail_url"], headers=headers)
+        assert first.status_code == 200
+        assert first.headers["content-type"] == "image/webp"
+        with Image.open(BytesIO(first.content)) as preview:
+            assert preview.size == (384, 256)
+        assert (await client.get(image["content_url"], headers=headers)).content == image_path.read_bytes()
+
+        def unexpected_decode(*args, **kwargs):
+            raise AssertionError("cached thumbnail should not decode the source again")
+
+        original_open = public.Image.open
+        monkeypatch.setattr(public.Image, "open", unexpected_decode)
+        second = await client.get(image["thumbnail_url"], headers=headers)
+        assert second.content == first.content
+        monkeypatch.setattr(public.Image, "open", original_open)
+
+        Image.new("RGB", (1200, 800), (250, 2, 2)).save(image_path)
+        refreshed = await client.get(image["thumbnail_url"], headers=headers)
+        assert refreshed.status_code == 200
+        assert refreshed.content != first.content
+        libraries.load = lambda: []
+        assert (await client.get(image["thumbnail_url"], headers=headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_library_thumbnail_keeps_orientation_and_transparency(tmp_path):
+    settings = __import__("app.settings", fromlist=["Settings"]).Settings(_env_file=None, data_dir=str(tmp_path / "data"))
+    pairing = PairingService(tmp_path / "pairing.db")
+    token = pairing.redeem_pairing_code(pairing.create_pairing_code(), "phone")
+    source = tmp_path / "gallery"
+    source.mkdir()
+    (source / "oriented.jpg").write_bytes(_image_bytes("JPEG", (400, 200), orientation=6))
+    transparent = Image.new("RGBA", (100, 50), (255, 0, 0, 0))
+    transparent.save(source / "transparent.png")
+    (source / "broken.png").write_bytes(b"not a png")
+    libraries = SimpleNamespace(load=lambda: [SimpleNamespace(id="gallery", name="Gallery", path=str(source), enabled=True, recursive=True)])
+    app = create_public_app(settings, pairing_service=pairing, library_service=libraries)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        listing = await client.get("/api/v1/libraries/gallery/images", headers=headers)
+        urls = {row["name"]: row["thumbnail_url"] for row in listing.json()["images"]}
+        oriented = await client.get(urls["oriented.jpg"], headers=headers)
+        with Image.open(BytesIO(oriented.content)) as preview:
+            assert preview.size == (192, 384)
+        alpha = await client.get(urls["transparent.png"], headers=headers)
+        with Image.open(BytesIO(alpha.content)) as preview:
+            assert preview.convert("RGBA").getpixel((0, 0))[3] == 0
+        assert (await client.get(urls["broken.png"], headers=headers)).status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_image_upload_returns_dimensions_after_exif_transpose_for_supported_formats(tmp_path):
     app, headers = _paired_app(tmp_path)
     images = [

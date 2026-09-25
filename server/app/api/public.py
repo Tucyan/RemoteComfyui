@@ -4,6 +4,7 @@ from io import BytesIO
 import mimetypes
 import hashlib
 import math
+import os
 import secrets
 import shutil
 import time
@@ -12,8 +13,9 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
-from PIL import Image
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..jobs.service import JobService
@@ -309,7 +311,15 @@ def register_public_routes(app, settings: Settings, pairing: PairingService, job
 
     @router.get("/library-images/{image_id}/thumbnail")
     async def library_image_thumbnail(request: Request, image_id: str):
-        return await library_image_content(request, image_id)
+        device(request)
+        _, path = _resolve_library_image(jobs, libraries, image_id)
+        try:
+            content = await run_in_threadpool(_library_thumbnail, path, Path(settings.data_dir) / "cache" / "library-thumbnails", image_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="library image not found") from exc
+        except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning, OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="invalid library image") from exc
+        return Response(content, media_type="image/webp", headers={"Cache-Control": "private, max-age=3600"})
 
     app.include_router(router)
 
@@ -452,6 +462,41 @@ def _resolve_library_image(jobs: JobService, libraries: LibraryService, image_id
     if root_path not in path.parents or not path.is_file():
         raise HTTPException(status_code=404, detail="library image not found")
     return row, path
+
+
+def _library_thumbnail(path: Path, cache_dir: Path, image_id: str) -> bytes:
+    stat = path.stat()
+    version = hashlib.sha256(f"webp384-v1:{path}:{stat.st_mtime_ns}:{stat.st_size}".encode("utf-8")).hexdigest()[:20]
+    cache_path = cache_dir / f"{image_id}-{version}.webp"
+    try:
+        return cache_path.read_bytes()
+    except FileNotFoundError:
+        pass
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with Image.open(path) as original:
+            original.seek(0)
+            with ImageOps.exif_transpose(original) as oriented:
+                oriented.thumbnail((384, 384), Image.Resampling.LANCZOS)
+                output = BytesIO()
+                oriented.convert("RGBA").save(output, format="WEBP", quality=80)
+                content = output.getvalue()
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        temporary = cache_dir / f"{image_id}-{version}-{secrets.token_hex(8)}.tmp"
+        try:
+            temporary.write_bytes(content)
+            os.replace(temporary, cache_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        for stale in cache_dir.glob(f"{image_id}-*.webp"):
+            if stale != cache_path:
+                stale.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return content
 
 
 def _sync_library(jobs: JobService, root) -> None:
