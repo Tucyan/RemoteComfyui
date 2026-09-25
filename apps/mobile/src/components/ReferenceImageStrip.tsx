@@ -1,6 +1,8 @@
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Image, Modal, Pressable, SafeAreaView, StyleSheet, Text, View, type ImageSourcePropType } from "react-native";
+import { ZoomableImage } from "./ZoomableImage";
 
-export type ReferenceItem = { id: string; name: string; uri?: string; width?: number; height?: number };
+export type ReferenceItem = { id: string; name: string; thumbnailSource: ImageSourcePropType; previewSource: ImageSourcePropType; width?: number; height?: number };
 
 type Props = {
   items: ReferenceItem[];
@@ -10,11 +12,16 @@ type Props = {
 };
 
 export function ReferenceImageStrip({ items, onMove, onRemove, onInsertToken }: Props) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = items.find((item) => item.id === selectedId);
+
   return (
     <View style={styles.list}>
       {items.map((item, index) => (
         <View key={item.id} style={styles.item}>
-          {item.uri ? <Image source={{ uri: item.uri }} style={styles.thumb} /> : <View style={[styles.thumb, styles.placeholder]}><Text>图</Text></View>}
+          <Pressable accessibilityRole="button" accessibilityLabel={`预览参考图 ${index + 1} ${item.name}`} onPress={() => setSelectedId(item.id)}>
+            <Image source={item.thumbnailSource} style={styles.thumb} />
+          </Pressable>
           <View style={styles.meta}>
             <Text style={styles.number}>Picture {index + 1}</Text>
             <Text numberOfLines={1} style={styles.name}>{item.name}</Text>
@@ -28,6 +35,15 @@ export function ReferenceImageStrip({ items, onMove, onRemove, onInsertToken }: 
         </View>
       ))}
       {items.length === 0 && <Text style={styles.empty}>至少添加一张参考图</Text>}
+      <Modal visible={selected !== undefined} animationType="slide" onRequestClose={() => setSelectedId(null)}>
+        <SafeAreaView style={styles.viewer}>
+          <View style={styles.viewerHeader}>
+            <Text numberOfLines={1} style={styles.viewerTitle}>{selected?.name}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="关闭参考图预览" onPress={() => setSelectedId(null)}><Text style={styles.viewerClose}>关闭</Text></Pressable>
+          </View>
+          {selected && <ZoomableImage key={selected.id} source={selected.previewSource} />}
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
@@ -36,7 +52,10 @@ const styles = StyleSheet.create({
   list: { gap: 8 },
   item: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#d8dde5", paddingVertical: 8, gap: 10 },
   thumb: { width: 72, height: 72, borderRadius: 6, backgroundColor: "#e8ecf2" },
-  placeholder: { alignItems: "center", justifyContent: "center" },
+  viewer: { flex: 1, backgroundColor: "#101827" },
+  viewerHeader: { minHeight: 58, paddingHorizontal: 18, flexDirection: "row", alignItems: "center" },
+  viewerTitle: { flex: 1, marginRight: 12, color: "#fff", fontSize: 15 },
+  viewerClose: { color: "#fff", fontSize: 18, fontWeight: "700", padding: 8 },
   meta: { flex: 1, justifyContent: "space-between", minWidth: 0 },
   number: { color: "#1b2a41", fontWeight: "700" },
   name: { color: "#64748b", fontSize: 12 },

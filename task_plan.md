@@ -45,6 +45,15 @@
 - [x] 后端回归、Gateway 刷新及旧失败任务状态校验
 - [ ] 用户重新提交一个低帧数视频任务进行 GPU 实际生成验证
 
+## 2026-09-25 参考图缩略图与预览
+
+- [x] 检查电脑图库导入、手机选图和现有图片预览流程
+- [x] 编写实施计划 `docs/superpowers/plans/2026-09-25-reference-image-preview.md`
+- [x] 测试先行：电脑图库参考图生成带鉴权的缩略图及原图来源
+- [x] 生成页显示所有参考图缩略图，点击后可缩放和拖动预览
+- [x] 运行手机端测试、类型检查、Android 导出及 release APK 构建验证
+- [ ] 在在线 Android 设备上验收电脑/手机参考图缩略图及手势操作
+
 ## 已知约束
 
 - ComfyUI: `D:\AI\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable`
@@ -65,3 +74,4 @@
 | 优化版 APK 安装时 ADB 没有在线设备 | 1 | 尝试启动本机 AVD；模拟器报告实例过多且未进入 ADB，保留 APK，等待用户启动模拟器后复测 |
 | MiniMax `ref_image_1` 参数异常 | 1 | 本机节点是 Autogrow，API 输入应为 `ref_images.ref_image_0` 起；模板构建器已更正 |
 | 修正后第一轮工作流测试误判 `ref_image_size` | 1 | 收紧旧键断言为 `ref_image_\d+` 后通过，生产映射未再改动 |
+| 2026-09-25 release APK 首次构建找不到 Android SDK | 1 | 本机 SDK 存在但 `ANDROID_HOME` 未设置；在第二次构建命令中临时指定后成功 |

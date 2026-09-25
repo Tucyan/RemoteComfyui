@@ -1,5 +1,16 @@
 # 进度记录
 
+## 2026-09-25
+
+- 已恢复项目上下文，定位生成页电脑参考图占位符的根因，并确认现有 `ZoomableImage` 可复用。
+- 用户要求本轮只写计划；已完成具体实施计划，未修改功能代码或运行测试。
+- 计划自检时发现工作区另有图标与管理页相关改动；本轮没有触碰这些文件。
+- 执行开始：手机端基线 `24 passed`。新增来源测试先因模块缺失、再因未实现函数失败；实现后目标测试 `2 passed`。
+- 生成页参考图已同时保存缩略图和原图 source；电脑图库 source 带 Bearer 鉴权，缩略图可点击进入共用的 `ZoomableImage` 预览。
+- 手机端完整测试 `26 passed`、TypeScript 检查、Android 导出均成功；`git diff --check` 未发现空白错误。
+- 首次 `assembleRelease` 因 `ANDROID_HOME` 未设置失败；确认本机 SDK 路径后第二次构建成功（`BUILD SUCCESSFUL in 31s`）。`apksigner verify` 显示 APK 的 v2 签名有效。
+- ADB 无在线设备，缩略图与缩放/拖动尚未进行实机验收；已保留此待办。
+
 ## 2026-09-19
 
 - 已读取 `planning-with-files` 技能说明并完成会话恢复检查。

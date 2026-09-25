@@ -26,6 +26,7 @@ import { ImageSettings, type EditImageSettingsDraft, type T2IImageSettingsDraft 
 import { VideoSettings, type VideoDraft } from "./src/components/VideoSettings";
 import { WorkflowPicker } from "./src/components/WorkflowPicker";
 import { ZoomableImage } from "./src/components/ZoomableImage";
+import { libraryReferenceSources, phoneReferenceSources } from "./src/domain/referenceImages";
 import {
   insertPictureToken,
   calculateVideoDimensions,
@@ -165,7 +166,7 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.95 });
       if (result.canceled) return;
       const uploaded = await api.uploadImages(result.assets.map((asset, index) => ({ uri: asset.uri, name: asset.fileName || `reference-${index + 1}.jpg`, type: asset.mimeType || "image/jpeg" })));
-      const next = uploaded.assets.map((asset, index) => ({ id: asset.id, assetId: asset.id, name: asset.filename, uri: result.assets[index]?.uri, width: asset.width, height: asset.height }));
+      const next = uploaded.assets.map((asset, index) => ({ id: asset.id, assetId: asset.id, name: asset.filename, ...phoneReferenceSources(result.assets[index].uri), width: asset.width, height: asset.height }));
       replaceReferences([...references, ...next]);
     } catch (cause) { setMessage(errorText(cause)); } finally { uploadingReferences.current = false; setBusy(false); }
   }
@@ -233,7 +234,7 @@ function Workspace({ api, pairing, onUnpair }: { api: RemoteApi; pairing: Pairin
         setBusy(true); setMessage("");
         try {
           const uploaded = await api.importLibraryImage(image);
-          replaceReferences([...references, { id: uploaded.id, assetId: uploaded.id, name: uploaded.filename, width: uploaded.width, height: uploaded.height }]);
+          replaceReferences([...references, { id: uploaded.id, assetId: uploaded.id, name: uploaded.filename, ...libraryReferenceSources(api, image), width: uploaded.width, height: uploaded.height }]);
           setTab("generate"); setMessage(`已加入 ${image.name}`);
         } catch (cause) { setMessage(errorText(cause)); setTab("generate"); } finally { importingLibrary.current = false; setBusy(false); }
       }} />}

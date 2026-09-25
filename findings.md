@@ -51,3 +51,11 @@
 - 当前 `app-debug.apk` 需 Metro；已另有内置 JS 的 `app-release.apk`。本轮改动后必须重建 release APK 才会体现在手机。
 - 视频服务端限制宽高为 32 的倍数，最大 1920×1088；帧数限定 124～362 且满足 `17n+5`。UI 自定义长宽与滑块生成值都需服从这些约束。
 - 产物路径位于数据目录 `artifacts` 下，数据库记录有 `storage_path`；删除必须验证路径仍在该目录内，再删除文件及记录，不可影响白名单图库或 ComfyUI 原始输出。
+
+# 2026-09-25 参考图预览
+
+- `Workspace` 从手机选择图片时保留本地 `asset.uri`，电脑图库导入时没有保存任何 URI，`ReferenceImageStrip` 因此显示占位符。
+- 图库图片提供受 Bearer 鉴权保护的 `thumbnail_url` 与 `content_url`。生成页的电脑参考图缩略图与预览须保留 Authorization 头。
+- `ZoomableImage` 已提供双指缩放和放大后单指拖动，可直接复用于参考图预览。
+- `README.md` 要求源码更新后重建 release APK；`expo export` 只导出 JS bundle，不会更新已安装的 APK。
+- 当前 ADB 设备列表为空，无法执行手机手势实测。
